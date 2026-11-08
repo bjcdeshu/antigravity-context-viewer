@@ -143,6 +143,20 @@ test('parsePlannerStepLine only counts real PLANNER_RESPONSE steps and ignores t
     }
   });
   assert.equal(parsePlannerStepLine(plannerWithoutUsage), null);
+
+  // 4) PLANNER_RESPONSE step where metadata contains a string property mentioning input_tokens (no token_usage object)
+  const metadataStringTrap = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    metadata: {
+      created_at: '2026-10-20T10:03:00Z',
+      customNote: '{"input_tokens": 9999999, "output_tokens": 8888888}'
+    }
+  });
+  assert.equal(parsePlannerStepLine(metadataStringTrap), null);
+
+  // 5) Malformed/truncated streaming PLANNER_RESPONSE line at EOF containing input_tokens in thinking/tool_calls
+  const truncatedStreamingLine = '{"type":"PLANNER_RESPONSE","created_at":"2026-10-20T10:04:00Z","thinking":"example \\"input_tokens\\": 77777777';
+  assert.equal(parsePlannerStepLine(truncatedStreamingLine), null);
 });
 
 test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDate, purges v1 archive inflation, and computes netTokens & cacheRatio', () => {
@@ -173,7 +187,10 @@ test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDa
       }
     }));
 
-    // Create transcript.jsonl with 1 real PLANNER_RESPONSE on 2026-10-20 and 1 tool output false-positive trap
+    // Create transcript.jsonl with 1 real PLANNER_RESPONSE on 2026-10-20, 1 tool output false-positive trap,
+    // and 1 truncated streaming line at the tail
+    const transcriptPath = path.join(brainSub, 'transcript.jsonl');
+    const partialTail = '{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-10-20T09:10:00Z","input_tokens":3000,"output_tokens":1000,"cache_read_tokens":6000,"thinking":"streaming';
     const lines = [
       JSON.stringify({
         type: 'CORTEX_STEP_TYPE_VIEW_FILE',
@@ -186,9 +203,10 @@ test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDa
           created_at: '2026-10-20T09:05:00Z',
           token_usage: { input_tokens: 2000, output_tokens: 500, cache_read_tokens: 7500 }
         }
-      })
+      }),
+      partialTail
     ];
-    fs.writeFileSync(path.join(brainSub, 'transcript.jsonl'), lines.join('\n') + '\n');
+    fs.writeFileSync(transcriptPath, lines.join('\n'));
 
     const res = collectTokenHistory({ homeDir: tmpHome, force: true });
     assert.equal(res.firstTokenDate, '2026-10-20');
@@ -200,8 +218,22 @@ test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDa
     assert.equal(res.dailyMap['2026-05-15'], undefined);
     assert.equal(res.dailyMap['2026-10-20'].total, 10000);
     assert.equal(res.dailyMap['2026-10-20'].steps, 1);
+
+    // Once the truncated tail line finishes writing, transcriptFileCache invalidates and counts the 2nd step
+    const completedLines = [
+      lines[0],
+      lines[1],
+      partialTail + ' done"}\n'
+    ];
+    fs.writeFileSync(transcriptPath, completedLines.join('\n'));
+    const resAfterComplete = collectTokenHistory({ homeDir: tmpHome, force: true });
+    assert.equal(resAfterComplete.summary.grandTotalTokens, 20000);
+    assert.equal(resAfterComplete.summary.netTokens, 6500);
+    assert.equal(resAfterComplete.dailyMap['2026-10-20'].total, 20000);
+    assert.equal(resAfterComplete.dailyMap['2026-10-20'].steps, 2);
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
 

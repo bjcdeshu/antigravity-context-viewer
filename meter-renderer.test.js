@@ -621,6 +621,23 @@ test('Direction B: terracotta & mono presets, Today card accuracy when today is 
   });
   assert.equal(h.elements.get('t-today-val').textContent, '5.0M');
   assert.match(h.elements.get('t-today-sub').textContent, /12 步请求 · 净 1\.0M · 缓存 80%/);
+  const snap = api.getTokenHistorySnapshotForTest();
+  assert.equal(snap.summary.cacheRatio, 80);
+  assert.equal(snap.summary.todayCacheRatio, 80);
+
+  // 4) Subsequent payload with only firstUseDate and empty dailyMap does not leak previous firstTokenDate,
+  //    and opening #panel-tokens does not overwrite newer state with an old window.__AGContextMeterHistory snapshot
+  h.sandbox.window.__AGContextMeterHistory = {
+    firstTokenDate: '2026-01-01',
+    dailyMap: { '2026-01-01': { total: 999000000, input: 999000000, output: 0, cache: 0, steps: 1 } }
+  };
+  api.setTokenHistoryForTest({
+    firstUseDate: '2025-03-15',
+    dailyMap: {}
+  });
+  h.elements.get('badge-tokens').click();
+  assert.equal(api.getTimelineWindow().firstUseDate, '2025-03-15');
+  assert.equal(h.elements.get('t-total-val').textContent, '0');
 
   api.dispose();
 });
@@ -653,7 +670,7 @@ test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Def
   assert.match(h.elements.get('ctx-breakdown-text').textContent, /构成：工具 56% · 系统 22%/);
   assert.equal(h.elements.get('bd-seg-tools').style.width, '55.6%');
 
-  // High occupancy (85% >= 75%) and slow speed (10 tok/s < 15) un-quiets both takeaways
+  // High occupancy (85% >= 75%) and slow speed (10 tok/s < 15) un-quiets both takeaways without colored ⚡ emoji
   h.sandbox.location.pathname = '/c/33333333-3333-3333-3333-333333333333';
   h.tick();
   h.finishScan(1);
@@ -666,9 +683,11 @@ test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Def
   }));
   await h.flush();
   assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'false');
+  assert.doesNotMatch(h.elements.get('key-takeaway').textContent, /⚡/);
   assert.equal(h.elements.get('speed-takeaway').getAttribute('data-quiet'), 'false');
 
   h.sandbox.__AGContextMeter.dispose();
 });
+
 
 

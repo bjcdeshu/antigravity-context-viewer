@@ -1017,7 +1017,7 @@
                 <span>暖陶色</span>
               </button>
               <button class="heat-preset-btn" type="button" data-heat-preset="mono" data-active="false">
-                <span class="heat-preset-dots"><i style="background:#242426"></i><i style="background:#3f3f46"></i><i style="background:#71717a"></i><i style="background:#a1a1aa"></i><i style="background:#e4e4e7"></i></span>
+                <span class="heat-preset-dots"><i style="background:#262629"></i><i style="background:#3f3f46"></i><i style="background:#63636e"></i><i style="background:#9494a1"></i><i style="background:#d4d4dc"></i></span>
                 <span>石墨灰</span>
               </button>
               <button class="heat-preset-btn" type="button" data-heat-preset="purple" data-active="false">
@@ -1243,7 +1243,7 @@
     heatLvl4: '--ag-custom-heat-lvl-4'
   };
   const COLOR_STORAGE_KEY = 'ag_custom_colors_v1';
-  const HEAT_PRESET_STORAGE_KEY = 'ag_heat_preset_v1';
+  const HEAT_PRESET_STORAGE_KEY = 'ag_heat_preset_v2';
   const customColors = {
     panelBg: '',
     ringUsed: '',
@@ -1264,8 +1264,8 @@
 
   const HEAT_PRESETS = {
     terracotta: {
-      dark: ['#262523', '#523025', '#874834', '#b85f43', '#d97757'],
-      light: ['#e7e5e0', '#f5d5c8', '#e8a890', '#d97757', '#a64d32']
+      dark: ['#262523', '#543225', '#8a4832', '#b85c3e', '#d97757'],
+      light: ['#e8e5de', '#f3d5c8', '#e6a88e', '#d97757', '#a64b2a']
     },
     mono: {
       dark: ['#262629', '#3f3f46', '#63636e', '#9494a1', '#d4d4dc'],
@@ -1300,7 +1300,7 @@
       for (const k of Object.keys(COLOR_SLOTS)) {
         if (typeof parsed?.[k] === 'string') customColors[k] = parsed[k];
       }
-      if (typeof parsed?.heatPreset === 'string' && HEAT_PRESETS[parsed.heatPreset]) {
+      if (parsed?.heatPresetSchema >= 2 && typeof parsed?.heatPreset === 'string' && HEAT_PRESETS[parsed.heatPreset]) {
         heatPreset = parsed.heatPreset;
       }
     }
@@ -1311,7 +1311,7 @@
   function saveCustomColors() {
     try {
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify({ ...customColors, heatPreset }));
+        localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify({ ...customColors, heatPreset, heatPresetSchema: 2 }));
         localStorage.setItem(HEAT_PRESET_STORAGE_KEY, heatPreset);
       }
     } catch {}
@@ -3025,33 +3025,36 @@
       }
     }
     ANTIGRAVITY_TOKEN_DATA.dailyMap = newMap;
-    if (payload.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstTokenDate)) {
-      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = payload.firstTokenDate;
-    } else if (payload.summary?.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstTokenDate)) {
-      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = payload.summary.firstTokenDate;
-    }
-    if (payload.firstInstallDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstInstallDate)) {
-      ANTIGRAVITY_TOKEN_DATA.firstInstallDate = payload.firstInstallDate;
-    }
-    if (payload.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstUseDate)) {
-      ANTIGRAVITY_TOKEN_DATA.firstUseDate = payload.firstUseDate;
-    } else if (payload.summary?.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstUseDate)) {
-      ANTIGRAVITY_TOKEN_DATA.firstUseDate = payload.summary.firstUseDate;
-    }
-    if (payload.updatedAt) ANTIGRAVITY_TOKEN_DATA.updatedAt = payload.updatedAt;
+    const payloadFirstToken = (payload.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstTokenDate))
+      ? payload.firstTokenDate
+      : ((payload.summary?.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstTokenDate)) ? payload.summary.firstTokenDate : null);
+    const payloadFirstInstall = (payload.firstInstallDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstInstallDate))
+      ? payload.firstInstallDate
+      : ((payload.summary?.firstInstallDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstInstallDate)) ? payload.summary.firstInstallDate : null);
+    const payloadFirstUse = (payload.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstUseDate))
+      ? payload.firstUseDate
+      : ((payload.summary?.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstUseDate)) ? payload.summary.firstUseDate : null);
 
     // 重新汇总卡片统计（今日无记录如实显示 0，不拿旧活跃日数据冒充今日）
     const map = ANTIGRAVITY_TOKEN_DATA.dailyMap;
     const keys = Object.keys(map).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && map[k]?.total > 0).sort();
-    if (keys.length) {
-      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = keys[0];
-      ANTIGRAVITY_TOKEN_DATA.firstUseDate = keys[0];
-    }
+    const earliestMapDate = keys[0] || null;
+    const resolvedFirstToken = earliestMapDate
+      ? (payloadFirstToken && payloadFirstToken < earliestMapDate ? payloadFirstToken : earliestMapDate)
+      : payloadFirstToken;
+    const resolvedFirstInstall = payloadFirstInstall || null;
+    const resolvedFirstUse = resolvedFirstToken || payloadFirstUse || resolvedFirstInstall || null;
+
+    ANTIGRAVITY_TOKEN_DATA.firstTokenDate = resolvedFirstToken;
+    ANTIGRAVITY_TOKEN_DATA.firstInstallDate = resolvedFirstInstall;
+    ANTIGRAVITY_TOKEN_DATA.firstUseDate = resolvedFirstUse;
+    if (payload.updatedAt) ANTIGRAVITY_TOKEN_DATA.updatedAt = payload.updatedAt;
+
     const todayStr = formatLocalYmd(new Date());
     const monthPrefix = todayStr.slice(0, 7);
     const yearPrefix = todayStr.slice(0, 4);
     let totalTokens = 0, todayTokens = 0, monthTokens = 0, yearTokens = 0, monthDays = 0;
-    let totalInput = 0, totalOutput = 0, totalCache = 0;
+    let totalInput = 0, totalOutput = 0, totalCache = 0, totalSteps = 0;
     let todayInput = 0, todayOutput = 0, todayCache = 0, todaySteps = 0;
     for (const k of keys) {
       const rec = map[k];
@@ -3064,6 +3067,7 @@
       totalInput += inp;
       totalOutput += out;
       totalCache += cac;
+      totalSteps += stp;
       if (k === todayStr) {
         todayTokens += t;
         todayInput += inp;
@@ -3088,19 +3092,28 @@
     ANTIGRAVITY_TOKEN_DATA.summary = {
       grandTotalTokens: totalTokens,
       totalTokens,
+      totalInputTokens: totalInput,
+      totalOutputTokens: totalOutput,
+      totalCacheTokens: totalCache,
       netTokens: totalNet,
       cacheTokens: totalCache,
-      cacheRatio: totalTokens > 0 ? Number((totalCache / totalTokens).toFixed(4)) : 0,
+      cacheRatio: totalTokens > 0 ? Number(((totalCache / totalTokens) * 100).toFixed(1)) : 0,
       todayTokens,
+      todayInputTokens: todayInput,
+      todayOutputTokens: todayOutput,
+      todayCacheTokens: todayCache,
       todaySteps,
       todayNetTokens: todayNet,
-      todayCacheRatio: todayTokens > 0 ? Number((todayCache / todayTokens).toFixed(4)) : 0,
+      todayCacheRatio: todayTokens > 0 ? Number(((todayCache / todayTokens) * 100).toFixed(1)) : 0,
       monthTokens,
       yearTokens,
+      totalSteps,
       totalDays: keys.length,
+      activeDaysCount: keys.length,
       totalConversations: convCount,
-      firstTokenDate: keys[0] || ANTIGRAVITY_TOKEN_DATA.firstTokenDate || null,
-      firstUseDate: keys[0] || ANTIGRAVITY_TOKEN_DATA.firstUseDate || null
+      firstTokenDate: resolvedFirstToken,
+      firstInstallDate: resolvedFirstInstall,
+      firstUseDate: resolvedFirstUse
     };
 
     const fmtCardM = v => {
@@ -3149,26 +3162,34 @@
   }
 
   let historySyncBusy = false;
-  async function syncTokenHistoryFromHost() {
+  let initialWindowHistoryApplied = false;
+  async function syncTokenHistoryFromHost(force = false) {
     if (historySyncBusy || state.disposed) return;
     historySyncBusy = true;
     try {
-      if (typeof window !== 'undefined' && window.__AGContextMeterHistory) {
+      if (!initialWindowHistoryApplied && typeof window !== 'undefined' && window.__AGContextMeterHistory) {
+        initialWindowHistoryApplied = true;
         applyTokenHistoryPayload(window.__AGContextMeterHistory);
       }
       if (typeof window !== 'undefined' && typeof window.contextMeterAPI?.getTokenHistory === 'function') {
-        const res = await window.contextMeterAPI.getTokenHistory(false);
-        if (res?.ok && res.data) applyTokenHistoryPayload(res.data);
+        const res = await window.contextMeterAPI.getTokenHistory(Boolean(force));
+        if (res?.ok && res.data) {
+          window.__AGContextMeterHistory = res.data;
+          applyTokenHistoryPayload(res.data);
+        }
       } else if (typeof window !== 'undefined' && window.__AGContextMeterLive?.port) {
         const live = window.__AGContextMeterLive;
         const r = await fetch(`http://127.0.0.1:${live.port}/token-history`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-AG-Context-Token': live.token },
-          body: JSON.stringify({ force: false })
+          body: JSON.stringify({ force: Boolean(force) })
         });
         if (r.ok) {
           const j = await r.json();
-          if (j?.ok && j.data) applyTokenHistoryPayload(j.data);
+          if (j?.ok && j.data) {
+            window.__AGContextMeterHistory = j.data;
+            applyTokenHistoryPayload(j.data);
+          }
         }
       }
     } catch {}
@@ -3652,7 +3673,7 @@
           if (pct >= 90) {
             keyTakeaway.textContent = `⚠ 上下文已消耗 ${pct.toFixed(1)}%，仅剩约 ${short(remainVal)} tokens，接近预算上限！建议清理冗余上下文。`;
           } else if (pct >= 75) {
-            keyTakeaway.textContent = `⚡ 已使用 ${pct.toFixed(1)}%，剩余可用空间约 ${short(remainVal)} tokens，注意大文件或长输出。`;
+            keyTakeaway.textContent = `• 已使用 ${pct.toFixed(1)}%，剩余可用空间约 ${short(remainVal)} tokens，注意大文件或长输出。`;
           } else {
             keyTakeaway.textContent = `✔ 当前用量健康（${pct.toFixed(1)}%），剩余可用空间充足（约 ${short(remainVal)} tokens），可正常继续对话。`;
           }
@@ -3673,7 +3694,7 @@
       // 渲染上下文构成比例微条与最近请求缓存命中率
       const ctxCacheHit = el('ctx-cache-hit');
       if (ctxCacheHit) {
-        if (d?.input > 0) {
+        if (d?.input > 0 && !danger) {
           const hitPct = Math.min(100, Math.round(((d.cached || 0) / d.input) * 100));
           ctxCacheHit.textContent = `缓存命中 ${hitPct}%`;
         } else {
@@ -3858,7 +3879,11 @@
     openColorPicker,
     closeColorPicker,
     applyPickerHex,
-    setTokenHistoryForTest: payload => applyTokenHistoryPayload(payload),
+    setTokenHistoryForTest: payload => {
+      initialWindowHistoryApplied = true;
+      return applyTokenHistoryPayload(payload);
+    },
+    getTokenHistorySnapshotForTest: () => JSON.parse(JSON.stringify(ANTIGRAVITY_TOKEN_DATA)),
     getTimelineWindow: () => {
       const w = computeTimelineWindow();
       return {

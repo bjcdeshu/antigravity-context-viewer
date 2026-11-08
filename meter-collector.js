@@ -256,33 +256,24 @@ function parsePlannerStepLine(line) {
     if (!isPlanner) return null;
     const meta = (obj.metadata && typeof obj.metadata === 'object') ? obj.metadata : obj;
     const createdAt = meta.created_at || meta.createdAt || obj.created_at || obj.createdAt || null;
+    const hasDirectUsage = target => Boolean(
+      target && typeof target === 'object' && (
+        target.input_tokens !== undefined || target.output_tokens !== undefined || target.cache_read_tokens !== undefined ||
+        target.inputTokens !== undefined || target.outputTokens !== undefined || target.cacheReadTokens !== undefined
+      )
+    );
     const usage = meta.token_usage || meta.tokenUsage || meta.usage || meta.model_usage || meta.modelUsage ||
       obj.token_usage || obj.tokenUsage || obj.usage || obj.plannerResponse?.token_usage || obj.plannerResponse?.usage ||
-      ((obj.input_tokens !== undefined || obj.output_tokens !== undefined || obj.cache_read_tokens !== undefined ||
-        obj.inputTokens !== undefined || obj.outputTokens !== undefined || obj.cacheReadTokens !== undefined) ? obj : null);
-    let inp = 0, outp = 0, cap = 0;
-    if (usage && typeof usage === 'object') {
-      inp = Number(usage.input_tokens ?? usage.inputTokens ?? 0) || 0;
-      outp = Number(usage.output_tokens ?? usage.outputTokens ?? 0) || 0;
-      cap = Number(usage.cache_read_tokens ?? usage.cacheReadTokens ?? 0) || 0;
-    } else if (obj.metadata && typeof obj.metadata === 'object') {
-      const metaJson = JSON.stringify(obj.metadata);
-      inp = Number((metaJson.match(/"input_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-      outp = Number((metaJson.match(/"output_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-      cap = Number((metaJson.match(/"cache_read_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-    }
+      (hasDirectUsage(meta) ? meta : (hasDirectUsage(obj) ? obj : null));
+    if (!usage || typeof usage !== 'object') return null;
+    const inp = Number(usage.input_tokens ?? usage.inputTokens ?? 0) || 0;
+    const outp = Number(usage.output_tokens ?? usage.outputTokens ?? 0) || 0;
+    const cap = Number(usage.cache_read_tokens ?? usage.cacheReadTokens ?? 0) || 0;
     const tot = inp + outp + cap;
     if (tot <= 0) return null;
     return { createdAt, input: inp, output: outp, cache: cap, total: tot };
   } catch {
-    if (!/^\s*\{\s*"type"\s*:\s*"(?:CORTEX_STEP_TYPE_)?PLANNER_RESPONSE"/.test(line)) return null;
-    const mDate = line.match(/"created_at"\s*:\s*"([^"]+)"/);
-    const inp = Number((line.match(/"input_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-    const outp = Number((line.match(/"output_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-    const cap = Number((line.match(/"cache_read_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
-    const tot = inp + outp + cap;
-    if (tot <= 0) return null;
-    return { createdAt: mDate ? mDate[1] : null, input: inp, output: outp, cache: cap, total: tot };
+    return null;
   }
 }
 
@@ -367,7 +358,7 @@ function collectTokenHistory(options = {}) {
       const st = fs.statSync(file);
       const cached = transcriptFileCache.get(file);
       let fileDaily;
-      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs) {
         fileDaily = cached.daily;
       } else {
         fileDaily = {};
@@ -393,7 +384,7 @@ function collectTokenHistory(options = {}) {
             }
           }
         }
-        transcriptFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, daily: fileDaily });
+        transcriptFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, daily: fileDaily });
       }
       for (const [dateKey, rec] of Object.entries(fileDaily)) {
         registerInstallDate(dateKey);
