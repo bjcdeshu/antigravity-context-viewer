@@ -82,6 +82,11 @@ test('badge renders visual progress bar and concise context number when unhovere
   h.pending[0].resolve(response({ usage: { inputTokens: 214624, outputTokens: 1454 }, chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } } })); await h.flush();
   assert.equal(h.elements.get('bar-fill').style.width, '84.40546875%');
   assert.match(h.elements.get('amount').textContent, /^216(?:\.1)?K \(84%\)$/);
+  assert.equal(h.elements.get('context-amount').textContent, '216.1K (84%)');
+  h.sandbox.__AGContextMeter.setAvailableWidthForTest(110);
+  assert.equal(h.elements.get('context-amount').textContent, '84%');
+  h.sandbox.__AGContextMeter.setAvailableWidthForTest(240);
+  assert.equal(h.elements.get('context-amount').textContent, '216.1K (84%)');
   assert.match(h.elements.get('hover-extra').textContent, /\/ 256K/);
   assert.equal(h.elements.get('key-used').textContent, '216.1K (84.4%)');
   assert.equal(h.elements.get('key-limit').textContent, '256K');

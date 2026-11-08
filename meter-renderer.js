@@ -253,9 +253,23 @@
       background:var(--ag-toolbar-bg-active);
     }
 
-    /* 单元 1: 上下文小圆环按钮（与原生 28x28 图标按钮同尺度） */
+    /* 单元 1: 上下文小圆环与直显用量胶囊 */
     #badge.ag-unit-ring{
-      width:28px;height:28px;padding:0;
+      height:28px;padding:0 7px;gap:5px;
+      color:var(--ag-custom-context-text,var(--ag-toolbar-fg));
+    }
+    #badge.ag-unit-ring:hover,#badge.ag-unit-ring:focus-visible,#badge.ag-unit-ring[aria-expanded="true"]{
+      color:var(--ag-custom-context-text,var(--ag-toolbar-fg-hover));
+    }
+    #context-amount{
+      font-variant-numeric:tabular-nums;
+      color:inherit;
+    }
+    :host([data-occupancy="warn"]) #context-amount{
+      color:var(--ag-ring-warn);
+    }
+    :host([data-occupancy="danger"]) #context-amount{
+      color:var(--ag-ring-danger);
     }
     .ring-svg{
       width:18px;height:18px;display:block;flex-shrink:0;overflow:visible;
@@ -319,9 +333,13 @@
     :host([data-layout="compact"]){
       gap:1px;
     }
+    :host([data-layout="compact"]) #badge.ag-unit-ring,
     :host([data-layout="compact"]) #badge-speed,
     :host([data-layout="compact"]) #badge-tokens{
       padding:0 5px;font-size:11.5px;gap:3px;
+    }
+    :host([data-layout="minimal"]) #badge.ag-unit-ring{
+      padding:0 5px;font-size:11.5px;gap:4px;
     }
     :host([data-layout="minimal"]) #badge-speed,
     :host([data-layout="minimal"]) #badge-tokens{
@@ -330,6 +348,10 @@
     :host([data-layout="minimal"]) #badge-overflow{
       display:inline-flex!important;
     }
+    :host([data-layout="ring-only"]) #badge.ag-unit-ring{
+      width:28px;padding:0;gap:0;
+    }
+    :host([data-layout="ring-only"]) #context-amount,
     :host([data-layout="ring-only"]) #badge-speed,
     :host([data-layout="ring-only"]) #badge-tokens,
     :host([data-layout="ring-only"]) #badge-overflow{
@@ -714,12 +736,13 @@
     }
   </style>
 
-  <!-- 顶部基本单元 1: 上下文小圆环 -->
+  <!-- 顶部基本单元 1: 上下文小圆环与直显用量 -->
   <button id="badge" class="ag-unit ag-unit-ring" type="button" aria-label="会话与上下文统计" aria-describedby="context-tooltip" aria-expanded="false">
     <svg id="ring-svg" class="ring-svg" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
       <circle id="ring-track" class="ring-track" cx="9" cy="9" r="6.5" fill="none" stroke-width="2.1"></circle>
       <circle id="ring-fill" class="ring-fill" cx="9" cy="9" r="6.5" fill="none" stroke-width="2.1" stroke-linecap="round" transform="rotate(-90 9 9)" stroke-dasharray="3.2 4.97"></circle>
     </svg>
+    <span id="context-amount">--</span>
     <div id="bar-wrap" class="sr-only" aria-hidden="true"><div id="bar-fill" class="meter-bar-fill"></div></div>
     <span id="amount" class="sr-only">读取中…</span>
     <span id="hover-wrap" class="sr-only"><span id="hover-extra"></span></span>
@@ -2414,6 +2437,7 @@
         if (om) om.hidden = true;
         el('badge-overflow')?.setAttribute('aria-expanded', 'false');
       }
+      syncContextBadgeText();
       syncSpeedBadgeText();
     }
   }
@@ -3537,6 +3561,46 @@
     if (state.tooltipOpen) positionContextTooltip();
   }
 
+  function syncContextBadgeText() {
+    const ctxAmount = el('context-amount');
+    if (!ctxAmount) return;
+    const d = state.latest;
+    const session = state.scan?.session;
+    const danger = d?.exceeded || d?.error;
+    const isMinimal = state.layoutMode === 'minimal';
+
+    let pct = null;
+    if (d?.exceeded) {
+      pct = 100;
+    } else if (d?.percent != null && !danger) {
+      pct = Math.min(100, Math.max(0, d.percent));
+    } else if (d?.actual != null && d?.budget && !danger) {
+      pct = Math.min(100, Math.max(0, (d.actual / d.budget) * 100));
+    }
+
+    if (d?.exceeded) {
+      ctxAmount.textContent = isMinimal ? '100%' : '超限 (100%)';
+    } else if (d?.error) {
+      ctxAmount.textContent = '异常';
+    } else if (d?.actual != null) {
+      const pctRound = pct != null ? (pct > 0 && pct < 1 ? 1 : Math.round(pct)) : null;
+      if (isMinimal) {
+        ctxAmount.textContent = pctRound != null ? `${pctRound}%` : short(d.actual);
+      } else {
+        ctxAmount.textContent = pctRound != null ? `${short(d.actual)} (${pctRound}%)` : short(d.actual);
+      }
+    } else if (d?.estimate != null) {
+      ctxAmount.textContent = `≈${short(d.estimate)}`;
+    } else if (session?.total?.high > 0) {
+      const mid = Math.round(((session.total.low || 0) + (session.total.high || 0)) / 2);
+      ctxAmount.textContent = `≈${short(mid)}`;
+    } else if (state.requestBusy || state.scanBusy) {
+      ctxAmount.textContent = '…';
+    } else {
+      ctxAmount.textContent = '--';
+    }
+  }
+
   function syncSpeedBadgeText() {
     const sp = state.latest?.speed;
     const speedAmount = el('speed-amount');
@@ -3612,6 +3676,7 @@
       setHoverExtra(` · ${corpus}`);
     }
 
+    syncContextBadgeText();
     el('badge-tokens').title = 'Token 用量一览（点击展开详情）';
 
     // 渲染输出速度 (统一使用 tok/s)
