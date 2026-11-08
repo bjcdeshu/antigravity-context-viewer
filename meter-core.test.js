@@ -100,3 +100,108 @@ test('inline attachments and images are fully counted and parsed instead of unkn
   assert.equal(scanned[0].low, 258);
   assert.deepEqual(scanned[0].unknownParts, []);
 });
+
+test('parsePlannerStepLine only counts real PLANNER_RESPONSE steps and ignores tool/code lines containing input_tokens', () => {
+  const { parsePlannerStepLine } = require('./meter-collector');
+
+  // 1) Valid PLANNER_RESPONSE line
+  const validLine = JSON.stringify({
+    type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+    metadata: {
+      created_at: '2026-10-20T10:00:00Z',
+      token_usage: { input_tokens: 1200, output_tokens: 300, cache_read_tokens: 8500 }
+    },
+    plannerResponse: {
+      response: 'Here is some code mentioning "input_tokens": 99999999'
+    }
+  });
+  const parsed = parsePlannerStepLine(validLine);
+  assert.deepEqual(parsed, {
+    createdAt: '2026-10-20T10:00:00Z',
+    input: 1200,
+    output: 300,
+    cache: 8500,
+    total: 10000
+  });
+
+  // 2) Tool output (e.g. VIEW_FILE) reading meter-collector.js that mentions PLANNER_RESPONSE and "input_tokens": 5000000
+  const toolLine = JSON.stringify({
+    type: 'CORTEX_STEP_TYPE_VIEW_FILE',
+    metadata: { created_at: '2026-10-20T10:01:00Z' },
+    viewFile: {
+      content: 'if (line.includes("PLANNER_RESPONSE")) { const x = {"input_tokens": 5000000, "output_tokens": 2000000}; }'
+    }
+  });
+  assert.equal(parsePlannerStepLine(toolLine), null);
+
+  // 3) PLANNER_RESPONSE step that has no token_usage in metadata, only code mentioning input_tokens in response text
+  const plannerWithoutUsage = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    metadata: { created_at: '2026-10-20T10:02:00Z' },
+    plannerResponse: {
+      response: 'Example JSON: {"input_tokens": 123456, "output_tokens": 654321}'
+    }
+  });
+  assert.equal(parsePlannerStepLine(plannerWithoutUsage), null);
+});
+
+test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDate, purges v1 archive inflation, and computes netTokens & cacheRatio', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { collectTokenHistory } = require('./meter-collector');
+
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-meter-test-'));
+  try {
+    const agDir = path.join(tmpHome, '.gemini', 'antigravity');
+    const convDir = path.join(agDir, 'conversations');
+    const brainSub = path.join(agDir, 'brain', 'conv-1', '.system_generated', 'logs');
+    fs.mkdirSync(convDir, { recursive: true });
+    fs.mkdirSync(brainSub, { recursive: true });
+
+    // Create an old .pb file from May 2026 (5 months before first token record)
+    const pbFile = path.join(convDir, 'old-session.pb');
+    fs.writeFileSync(pbFile, 'dummy');
+    const mayDate = new Date('2026-05-15T08:00:00Z');
+    fs.utimesSync(pbFile, mayDate, mayDate);
+
+    // Create a legacy v1 archive with inflated fake data (no schemaVersion: 2)
+    fs.writeFileSync(path.join(agDir, 'token_usage_archive_v1.json'), JSON.stringify({
+      firstUseDate: '2026-05-15',
+      dailyMap: {
+        '2026-05-15': { total: 999999999, input: 999999999, output: 0, cache: 0, steps: 1 }
+      }
+    }));
+
+    // Create transcript.jsonl with 1 real PLANNER_RESPONSE on 2026-10-20 and 1 tool output false-positive trap
+    const lines = [
+      JSON.stringify({
+        type: 'CORTEX_STEP_TYPE_VIEW_FILE',
+        metadata: { created_at: '2026-10-20T09:00:00Z' },
+        viewFile: { content: 'PLANNER_RESPONSE "input_tokens": 88888888' }
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        metadata: {
+          created_at: '2026-10-20T09:05:00Z',
+          token_usage: { input_tokens: 2000, output_tokens: 500, cache_read_tokens: 7500 }
+        }
+      })
+    ];
+    fs.writeFileSync(path.join(brainSub, 'transcript.jsonl'), lines.join('\n') + '\n');
+
+    const res = collectTokenHistory({ homeDir: tmpHome, force: true });
+    assert.equal(res.firstTokenDate, '2026-10-20');
+    assert.equal(res.firstUseDate, '2026-10-20');
+    assert.equal(res.firstInstallDate, '2026-05-15');
+    assert.equal(res.summary.grandTotalTokens, 10000);
+    assert.equal(res.summary.netTokens, 2500);
+    assert.equal(res.summary.cacheRatio, 75);
+    assert.equal(res.dailyMap['2026-05-15'], undefined);
+    assert.equal(res.dailyMap['2026-10-20'].total, 10000);
+    assert.equal(res.dailyMap['2026-10-20'].steps, 1);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+

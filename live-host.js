@@ -6,7 +6,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { connect } = require('./local-api');
-const { collect } = require('./meter-collector');
+const { collect, collectTokenHistory } = require('./meter-collector');
 const { getStateDir } = require('./asar-engine');
 (async () => {
   const api = await connect();
@@ -22,11 +22,18 @@ const { getStateDir } = require('./asar-engine');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-AG-Context-Token');
       res.writeHead(204); res.end(); return;
     }
-    if (req.method !== 'POST' || req.url !== '/scan' || req.headers['x-ag-context-token'] !== secret) { res.writeHead(403); res.end(); return; }
+    if (req.method !== 'POST' || (req.url !== '/scan' && req.url !== '/token-history') || req.headers['x-ag-context-token'] !== secret) { res.writeHead(403); res.end(); return; }
     let body = '';
     req.on('data', chunk => { body += chunk; if (body.length > 1024) req.destroy(); });
     req.on('end', async () => {
-      try { const request = JSON.parse(body); const data = await collect(api.origin, request.id, { force: request.force === true }); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, data })); }
+      try {
+        const request = body ? JSON.parse(body) : {};
+        const data = req.url === '/token-history'
+          ? collectTokenHistory({ force: request.force === true })
+          : await collect(api.origin, request.id, { force: request.force === true });
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: true, data }));
+      }
       catch (e) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: false, error: e.message })); }
     });
   });

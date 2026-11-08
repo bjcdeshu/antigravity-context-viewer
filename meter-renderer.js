@@ -14,17 +14,28 @@
   const ANTIGRAVITY_TOKEN_DATA = {
     updatedAt: "",
     firstUseDate: null,
+    firstTokenDate: null,
+    firstInstallDate: null,
     summary: {
       grandTotalTokens: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalCacheTokens: 0,
+      netTokens: 0,
+      cacheRatio: 0,
       todayTokens: 0,
+      todayInputTokens: 0,
+      todayOutputTokens: 0,
+      todayCacheTokens: 0,
+      todayNetTokens: 0,
+      todayCacheRatio: 0,
+      todaySteps: 0,
       monthTokens: 0,
       yearTokens: 0,
       totalSteps: 0,
       totalConversations: 0,
       firstUseDate: null,
+      firstTokenDate: null,
       activeDaysCount: 0
     },
     dailyMap: {}
@@ -36,7 +47,8 @@
   shadow.innerHTML = `<style>
     :host{
       position:fixed;top:6px;right:138px;z-index:2147483000;
-      font:12px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+      font:12px/1.45 "Google Sans Flex","Google Sans",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+      --ag-font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
       -webkit-app-region:no-drag;user-select:none;display:inline-flex;align-items:center;gap:2px;
       height:28px;flex-shrink:0;vertical-align:middle;
 
@@ -49,61 +61,61 @@
       --ag-toolbar-border-focus:var(--primary,rgba(128,128,128,0.45));
       --ag-divider:var(--border,rgba(255,255,255,0.08));
 
-      /* 圆环与各指标默认主题色 */
+      /* 圆环与各指标默认主题色（Direction B: AG 原生骨架 × Claude 暖陶克制） */
       --ag-ring-track-default:rgba(255,255,255,0.20);
       --ag-ring-used-default:#e6e6eb;
-      --ag-ring-warn:#f59e0b;
+      --ag-ring-warn:#d97706;
       --ag-ring-danger:#ef4444;
 
       --ag-context-text-default:#ececef;
       --ag-speed-default:#b8b8c0;
       --ag-token-total-default:#b8b8c0;
-      --ag-token-accent-default:#a78bfa;
+      --ag-token-accent-default:#d97757;
 
       /* 0 级主题背景与一级/二级严格统一背景色 */
       --ag-bg-panel-default:var(--ag-host-bg,var(--background,#181818));
       --ag-unified-bg:var(--ag-custom-panel-bg,var(--ag-bg-panel-default));
 
       --ag-float-bg:var(--ag-unified-bg);
-      --ag-float-border:rgba(255,255,255,0.12);
-      --ag-float-shadow:0 12px 32px rgba(0,0,0,0.52),0 2px 8px rgba(0,0,0,0.32);
+      --ag-float-border:rgba(255,255,255,0.10);
+      --ag-float-shadow:0 12px 32px rgba(0,0,0,0.48),0 2px 8px rgba(0,0,0,0.28);
 
       --ag-bg-panel:var(--ag-unified-bg);
-      --ag-border-panel:rgba(255,255,255,0.11);
-      --ag-shadow-panel:0 16px 40px rgba(0,0,0,0.58),0 2px 10px rgba(0,0,0,0.32);
+      --ag-border-panel:rgba(255,255,255,0.10);
+      --ag-shadow-panel:0 16px 40px rgba(0,0,0,0.52),0 2px 10px rgba(0,0,0,0.28);
       --ag-text-primary:#ececef;
-      --ag-text-secondary:#c8c8d0;
+      --ag-text-secondary:#c4c4cc;
       --ag-text-muted:#8a8a94;
       --ag-border-subtle:rgba(255,255,255,0.08);
 
       /* 一级面板与二级内部菜单/卡片/抽屉背景严格一致 */
       --ag-bg-card:var(--ag-unified-bg);
       --ag-bg-card-hover:var(--ag-unified-bg);
-      --ag-border-card:rgba(255,255,255,0.09);
+      --ag-border-card:rgba(255,255,255,0.08);
       --ag-bg-subcard:var(--ag-unified-bg);
-      --ag-border-subcard:rgba(255,255,255,0.08);
+      --ag-border-subcard:rgba(255,255,255,0.07);
       --ag-bg-status:var(--ag-unified-bg);
       --ag-text-status:#c8c8d0;
 
       --ag-btn-bg:var(--ag-unified-bg);
-      --ag-btn-hover:rgba(255,255,255,0.08);
-      --ag-btn-border:rgba(255,255,255,0.12);
-      --ag-btn-border-hover:rgba(255,255,255,0.22);
+      --ag-btn-hover:rgba(255,255,255,0.07);
+      --ag-btn-border:rgba(255,255,255,0.11);
+      --ag-btn-border-hover:rgba(255,255,255,0.20);
       --ag-btn-text:#d4d4d8;
 
       --ag-pill-muted-bg:var(--ag-unified-bg);
-      --ag-pill-muted-border:rgba(255,255,255,0.12);
+      --ag-pill-muted-border:rgba(255,255,255,0.11);
       --ag-pill-muted-text:#9a9aa2;
 
-      --ag-track-bg:rgba(255,255,255,0.12);
+      --ag-track-bg:rgba(255,255,255,0.11);
       --ag-track-shadow:none;
 
       --ag-heat-bg:var(--ag-unified-bg);
-      --ag-heat-lvl-0:#27272a;
-      --ag-heat-lvl-1:#3f1e6b;
-      --ag-heat-lvl-2:#652ab7;
-      --ag-heat-lvl-3:#9053f8;
-      --ag-heat-lvl-4:#c084fc;
+      --ag-heat-lvl-0:#262523;
+      --ag-heat-lvl-1:#543225;
+      --ag-heat-lvl-2:#8a4832;
+      --ag-heat-lvl-3:#b85c3e;
+      --ag-heat-lvl-4:#d97757;
       --ag-heat-outline:#ffffff;
 
       --ag-pop-bg:var(--ag-unified-bg);
@@ -157,18 +169,18 @@
       --ag-context-text-default:#18181b;
       --ag-speed-default:#52525b;
       --ag-token-total-default:#52525b;
-      --ag-token-accent-default:#7c3aed;
+      --ag-token-accent-default:#c6613f;
 
       --ag-bg-panel-default:var(--ag-host-bg,var(--background,#ffffff));
       --ag-unified-bg:var(--ag-custom-panel-bg,var(--ag-bg-panel-default));
 
       --ag-float-bg:var(--ag-unified-bg);
-      --ag-float-border:rgba(0,0,0,0.12);
-      --ag-float-shadow:0 8px 24px rgba(0,0,0,0.12),0 2px 6px rgba(0,0,0,0.06);
+      --ag-float-border:rgba(0,0,0,0.10);
+      --ag-float-shadow:0 8px 24px rgba(0,0,0,0.10),0 2px 6px rgba(0,0,0,0.05);
 
       --ag-bg-panel:var(--ag-unified-bg);
-      --ag-border-panel:rgba(0,0,0,0.12);
-      --ag-shadow-panel:0 14px 36px rgba(0,0,0,0.14),0 2px 8px rgba(0,0,0,0.06);
+      --ag-border-panel:rgba(0,0,0,0.10);
+      --ag-shadow-panel:0 14px 36px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.05);
       --ag-text-primary:#18181b;
       --ag-text-secondary:#3f3f46;
       --ag-text-muted:#71717a;
@@ -176,31 +188,31 @@
 
       --ag-bg-card:var(--ag-unified-bg);
       --ag-bg-card-hover:var(--ag-unified-bg);
-      --ag-border-card:rgba(0,0,0,0.10);
+      --ag-border-card:rgba(0,0,0,0.09);
       --ag-bg-subcard:var(--ag-unified-bg);
-      --ag-border-subcard:rgba(0,0,0,0.09);
+      --ag-border-subcard:rgba(0,0,0,0.08);
       --ag-bg-status:var(--ag-unified-bg);
       --ag-text-status:#27272a;
 
       --ag-btn-bg:var(--ag-unified-bg);
       --ag-btn-hover:rgba(0,0,0,0.05);
-      --ag-btn-border:rgba(0,0,0,0.12);
-      --ag-btn-border-hover:rgba(0,0,0,0.22);
+      --ag-btn-border:rgba(0,0,0,0.11);
+      --ag-btn-border-hover:rgba(0,0,0,0.20);
       --ag-btn-text:#18181b;
 
       --ag-pill-muted-bg:var(--ag-unified-bg);
-      --ag-pill-muted-border:rgba(0,0,0,0.12);
+      --ag-pill-muted-border:rgba(0,0,0,0.11);
       --ag-pill-muted-text:#52525b;
 
       --ag-track-bg:rgba(0,0,0,0.08);
       --ag-track-shadow:none;
 
       --ag-heat-bg:var(--ag-unified-bg);
-      --ag-heat-lvl-0:#e4e4e7;
-      --ag-heat-lvl-1:#e9d5ff;
-      --ag-heat-lvl-2:#c084fc;
-      --ag-heat-lvl-3:#9333ea;
-      --ag-heat-lvl-4:#6b21a8;
+      --ag-heat-lvl-0:#e8e5de;
+      --ag-heat-lvl-1:#f3d5c8;
+      --ag-heat-lvl-2:#e6a88e;
+      --ag-heat-lvl-3:#d97757;
+      --ag-heat-lvl-4:#a64b2a;
       --ag-heat-outline:#18181b;
 
       --ag-scrollbar-thumb:rgba(0,0,0,0.16);
@@ -483,13 +495,13 @@
     .cp-copy-btn:hover{color:var(--ag-text-primary);background:var(--ag-toolbar-bg-hover)}
     .cp-footer{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:7px;border-top:1px solid var(--ag-border-subtle)}
 
-    /* 弹出面板：上下文 (#panel) 与 Token 用量一览 (#panel-tokens) 独立面板 */
+    /* 弹出面板：上下文 (#panel) 与 Token 用量一览 (#panel-tokens) 独立面板 (Direction B: 12px 圆角与去盒化排版) */
     .ag-panel{
       box-sizing:border-box;
       position:fixed;top:38px;left:auto;right:16px;z-index:2147483500;
       max-width:calc(100vw - 24px);max-height:calc(100vh - 52px);
-      overflow:auto;border:1px solid var(--ag-border-panel);border-radius:10px;
-      background:var(--ag-bg-panel);color:var(--ag-text-primary);box-shadow:var(--ag-shadow-panel);padding:14px;
+      overflow:auto;border:1px solid var(--ag-border-panel);border-radius:12px;
+      background:var(--ag-bg-panel);color:var(--ag-text-primary);box-shadow:var(--ag-shadow-panel);padding:14px 16px;
       opacity:1;transform:translateY(0);visibility:visible;pointer-events:auto;
       transition:opacity .14s ease,transform .14s ease,visibility .14s ease;
       contain:layout paint;
@@ -499,31 +511,33 @@
     .ag-panel[hidden]{display:block!important;opacity:0;transform:translateY(-4px);visibility:hidden;pointer-events:none}
 
     /* 顶栏控制条 */
-    .panel-header-bar{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ag-border-subtle);padding-bottom:9px;margin-bottom:11px}
-    .panel-title{display:flex;align-items:center;gap:5px}
+    .panel-header-bar{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ag-border-subtle);padding-bottom:9px;margin-bottom:10px}
+    .panel-title{display:flex;align-items:baseline;gap:6px}
     .panel-title-tokens{color:var(--ag-custom-token-accent,var(--ag-token-accent-default))}
     .panel-header-actions{display:flex;align-items:center;gap:4px}
 
     .panel-icon-btn{
-      background:none;border:0;color:var(--ag-text-muted);font-size:12px;line-height:1;
+      background:none;border:0;color:var(--ag-text-muted);font-size:11.5px;line-height:1;
       padding:4px 7px;border-radius:6px;cursor:pointer;transition:background-color .14s ease,color .14s ease;
       display:inline-flex;align-items:center;justify-content:center;gap:3px;
     }
     .panel-icon-btn:hover{color:var(--ag-text-primary);background:var(--ag-toolbar-bg-hover)}
     #close,#close-tokens{font-size:16px;padding:2px 7px}
 
-    h3{margin:0;font-size:13px;font-weight:600;color:var(--ag-text-primary)}
+    h3{margin:0;font-size:13px;font-weight:600;color:var(--ag-text-primary);letter-spacing:-0.01em}
     h4{margin:12px 0 5px;font-size:11.5px;font-weight:600;color:var(--ag-text-secondary)}
     p{margin:5px 0;color:var(--ag-text-muted)}
     dl{display:grid;grid-template-columns:1fr auto;gap:5px;margin:0}
     dt{color:var(--ag-text-muted)}
     dd{margin:0;text-align:right;color:var(--ag-text-primary);font-variant-numeric:tabular-nums;overflow-wrap:anywhere;max-width:270px}
 
-    #key-summary{background:var(--ag-bg-card);border:1px solid var(--ag-border-card);border-radius:8px;padding:11px 12px;margin:6px 0 10px}
+    /* 去盒化（De-boxing）：平铺无框指标分区 + 1px 细分割线 */
+    #key-summary{background:transparent;border:0;border-bottom:1px solid var(--ag-border-subtle);border-radius:0;padding:2px 0 11px;margin:0 0 10px}
+    #speed-summary{background:transparent;border:0;border-bottom:1px solid var(--ag-border-subtle);border-radius:0;padding:2px 0 11px;margin:0 0 8px}
     .key-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
-    .key-title{font-size:12px;font-weight:600;color:var(--ag-text-primary);display:flex;align-items:center;gap:5px}
-    .key-pill{font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;border:1px solid transparent}
-    .pill-good{color:#52c41a;background:rgba(82,196,26,0.12);border-color:rgba(82,196,26,0.28)}
+    .key-title{font-size:11.5px;font-weight:600;color:var(--ag-text-secondary);display:flex;align-items:center;gap:5px;letter-spacing:0.01em}
+    .key-pill{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;border:1px solid transparent}
+    .pill-good{color:#52c41a;background:rgba(82,196,26,0.10);border-color:rgba(82,196,26,0.24)}
     :host([data-theme="light"]) .pill-good{color:#389e0d;background:#f6ffed;border-color:#b7eb8f}
     .pill-warn{color:#faad14;background:rgba(250,173,20,0.12);border-color:rgba(250,173,20,0.28)}
     :host([data-theme="light"]) .pill-warn{color:#d46b08;background:#fff7e6;border-color:#ffd591}
@@ -531,16 +545,33 @@
     :host([data-theme="light"]) .pill-danger{color:#cf1322;background:#fff1f0;border-color:#ffa39e}
     .pill-muted{color:var(--ag-pill-muted-text);background:var(--ag-pill-muted-bg);border-color:var(--ag-pill-muted-border)}
 
-    .key-bar-track{width:100%;height:6px;background:var(--ag-custom-ring-track,var(--ag-track-bg));border-radius:3px;overflow:hidden;margin-bottom:9px}
-    .key-bar-fill{height:100%;width:0%;border-radius:3px;background:var(--ag-custom-ring-used,var(--bar-color,#69c0ff));transition:width .24s ease,background-color .2s ease}
+    .key-bar-track{width:100%;height:5px;background:var(--ag-custom-ring-track,var(--ag-track-bg));border-radius:3px;overflow:hidden;margin-bottom:8px}
+    .key-bar-fill{height:100%;width:0%;border-radius:3px;background:var(--ag-custom-ring-used,var(--bar-color,#d97757));transition:width .24s ease,background-color .2s ease}
     :host([data-occupancy="warn"]) .key-bar-fill{background:var(--ag-ring-warn)}
     :host([data-occupancy="danger"]) .key-bar-fill{background:var(--ag-ring-danger)}
-    .key-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;text-align:center;margin-bottom:7px}
-    .key-stat{background:var(--ag-bg-subcard);padding:6px 4px;border-radius:6px;border:1px solid var(--ag-border-subcard)}
+
+    /* 上下文构成比例微条 (Context Breakdown) */
+    .ctx-breakdown{margin:0 0 9px;padding:0}
+    .ctx-breakdown-bar{display:flex;width:100%;height:3px;border-radius:2px;overflow:hidden;background:var(--ag-track-bg);gap:1.5px;margin-bottom:5px}
+    .bd-seg{height:100%;display:block;transition:width .22s ease}
+    .bd-seg-tools{background:#d97757}
+    .bd-seg-system{background:#8b8b96}
+    .bd-seg-user{background:#60a5fa}
+    .bd-seg-assistant{background:#34d399}
+    .bd-seg-thinking{background:#a78bfa}
+    .bd-seg-attachments{background:#f59e0b}
+    .ctx-breakdown-meta{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10.5px;color:var(--ag-text-muted);font-variant-numeric:tabular-nums}
+    .ctx-breakdown-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .ctx-cache-hit{flex-shrink:0;color:var(--ag-text-secondary);font-weight:500}
+
+    .key-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;text-align:left;margin-bottom:2px;padding:2px 0}
+    .key-stat{background:transparent;padding:2px 10px 2px 0;border:0;border-radius:0}
+    .key-stat + .key-stat{border-left:1px solid var(--ag-border-subtle);padding-left:12px}
     .key-stat-label{font-size:10px;color:var(--ag-text-muted);margin-bottom:2px}
-    .key-stat-val{font-size:12px;font-weight:600;color:var(--ag-text-primary);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .key-stat-val{font-family:var(--ag-font-mono);font-size:12.5px;font-weight:600;color:var(--ag-text-primary);font-variant-numeric:tabular-nums;letter-spacing:-0.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #key-used{color:var(--ag-custom-context-text,var(--ag-text-primary))}
-    .key-takeaway{font-size:11px;color:var(--ag-text-secondary);padding-top:6px;border-top:1px solid var(--ag-border-subcard);line-height:1.4}
+    .key-takeaway{font-size:11px;color:var(--ag-text-secondary);padding-top:6px;margin-top:6px;border-top:1px solid var(--ag-border-subtle);line-height:1.4}
+    .key-takeaway[data-quiet="true"]{display:none}
 
     #status{padding:7px 10px;border:0;border-left:2.5px solid var(--tone,#666);border-radius:4px;background:var(--ag-bg-status);color:var(--ag-text-status);font-weight:500;font-size:11.5px}
     #model{overflow-wrap:anywhere;font-size:11.5px;color:var(--ag-text-muted)}
@@ -556,16 +587,16 @@
     :host([data-theme="light"]) .file-unknown{color:#b45309}
     #v{color:var(--ag-text-muted);font-size:10px;font-weight:400;margin-left:6px}
 
-    /* 全局 Token 用量一览 */
+    /* 全局 Token 用量一览（平铺克制卡片 + 细分割线） */
     #view-tokens{display:flex;flex-direction:column;gap:10px}
-    .token-stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-    .t-card{background:var(--ag-bg-card);border:1px solid var(--ag-border-card);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:3px;transition:background-color .14s ease}
-    .t-card:hover{background:var(--ag-bg-card-hover)}
+    .token-stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid var(--ag-border-subtle);padding:2px 0 11px}
+    .t-card{background:transparent;border:0;border-radius:0;padding:2px 12px 2px 0;display:flex;flex-direction:column;gap:3px}
+    .t-card + .t-card{border-left:1px solid var(--ag-border-subtle);padding-left:12px}
     .t-card-lbl{font-size:11px;color:var(--ag-text-muted);display:flex;justify-content:space-between}
-    .t-card-val{font-size:16.5px;font-weight:700;color:var(--ag-text-primary);letter-spacing:-0.3px;font-variant-numeric:tabular-nums}
+    .t-card-val{font-family:var(--ag-font-mono);font-size:16.5px;font-weight:700;color:var(--ag-text-primary);letter-spacing:-0.4px;font-variant-numeric:tabular-nums}
     #t-total-val{color:var(--ag-custom-token-total,var(--ag-text-primary))}
     #t-today-val{color:var(--ag-custom-token-accent,var(--ag-text-primary))}
-    .t-card-sub{font-size:10px;color:var(--ag-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .t-card-sub{font-size:10.5px;color:var(--ag-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 
     .heatmap-section{background:var(--ag-heat-bg);border:1px solid var(--ag-border-card);border-radius:10px;padding:12px}
     .heat-header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -694,9 +725,9 @@
     <span id="hover-wrap" class="sr-only"><span id="hover-extra"></span></span>
   </button>
 
-  <!-- 顶部基本单元 2: 输出速度 (tok/s) -->
+  <!-- 顶部基本单元 2: 输出速度 (tok/s，单色 SVG 脉冲图标) -->
   <button id="badge-speed" class="ag-unit" type="button" aria-label="模型输出速度与耗时统计" aria-expanded="false">
-    <span class="speed-icon" aria-hidden="true">⚡</span>
+    <span class="speed-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5L3.5 9h4.5l-1 5.5L12.5 7H8l1-5.5z"/></svg></span>
     <span id="speed-amount">-- tok/s</span>
     <span id="speed-hover-extra" class="sr-only"></span>
   </button>
@@ -727,7 +758,7 @@
   <!-- 窄屏溢出菜单 -->
   <div id="overflow-menu" hidden aria-label="更多统计快捷菜单">
     <button id="overflow-speed-btn" class="overflow-item" type="button">
-      <span class="overflow-item-label"><span>⚡</span><span>输出速度</span></span>
+      <span class="overflow-item-label"><span>输出速度</span></span>
       <span id="overflow-speed-val" class="overflow-item-val">-- tok/s</span>
     </button>
     <button id="overflow-tokens-btn" class="overflow-item" type="button">
@@ -740,31 +771,41 @@
   <section id="panel" class="ag-panel" hidden aria-label="会话与上下文详情">
     <div class="panel-header-bar">
       <div class="panel-title">
-        <span style="font-size:13px;font-weight:600;color:var(--ag-text-primary)">💬 当前会话上下文</span>
+        <h3>当前会话上下文<span id="v">v2.7</span></h3>
       </div>
       <div class="panel-header-actions">
-        <button id="theme-toggle" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">🌓</button>
+        <button id="theme-toggle" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">自动</button>
         <button id="close" class="panel-icon-btn" type="button" aria-label="收起详情">×</button>
       </div>
     </div>
 
     <div id="view-context">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <h3 style="margin:0">会话用量与生成监控<span id="v">v2.7</span></h3>
-      </div>
-
-      <!-- 卡片 1: 核心用量速览 -->
+      <!-- 分区 1: 上下文容量与构成微条 -->
       <div id="key-summary">
-        <div class="key-header"><span class="key-title">⭐ 核心用量速览</span><span id="key-badge" class="key-pill pill-muted">读取中</span></div>
+        <div class="key-header"><span class="key-title">上下文容量</span><span id="key-badge" class="key-pill pill-muted">读取中</span></div>
         <div class="key-bar-track"><div id="key-bar-fill" class="key-bar-fill"></div></div>
+        <div id="ctx-breakdown" class="ctx-breakdown">
+          <div id="ctx-breakdown-bar" class="ctx-breakdown-bar" aria-label="上下文构成比例">
+            <span id="bd-seg-tools" class="bd-seg bd-seg-tools" style="width:0%"></span>
+            <span id="bd-seg-system" class="bd-seg bd-seg-system" style="width:0%"></span>
+            <span id="bd-seg-user" class="bd-seg bd-seg-user" style="width:0%"></span>
+            <span id="bd-seg-assistant" class="bd-seg bd-seg-assistant" style="width:0%"></span>
+            <span id="bd-seg-thinking" class="bd-seg bd-seg-thinking" style="width:0%"></span>
+            <span id="bd-seg-attachments" class="bd-seg bd-seg-attachments" style="width:0%"></span>
+          </div>
+          <div class="ctx-breakdown-meta">
+            <span id="ctx-breakdown-text" class="ctx-breakdown-text">构成：扫描中…</span>
+            <span id="ctx-cache-hit" class="ctx-cache-hit">缓存命中 —</span>
+          </div>
+        </div>
         <div class="key-stats"><div class="key-stat"><div class="key-stat-label">当前已用</div><div id="key-used" class="key-stat-val">—</div></div><div class="key-stat"><div class="key-stat-label">预算上限</div><div id="key-limit" class="key-stat-val">—</div></div><div class="key-stat"><div class="key-stat-label">剩余可用</div><div id="key-remaining" class="key-stat-val">—</div></div></div>
-        <div id="key-takeaway" class="key-takeaway">正在计算核心指标…</div>
+        <div id="key-takeaway" class="key-takeaway" data-quiet="true">正在计算核心指标…</div>
       </div>
 
-      <!-- 卡片 2: 输出速度与延迟速览 -->
-      <div id="speed-summary" style="background:var(--ag-bg-card);border:1px solid var(--ag-border-card);border-radius:8px;padding:11px 12px;margin:8px 0 10px;">
+      <!-- 分区 2: 输出速度与延迟速览 -->
+      <div id="speed-summary">
         <div class="key-header">
-          <span class="key-title" style="color:var(--ag-custom-speed,var(--ag-text-primary));">⚡ 最新生成速度与耗时</span>
+          <span class="key-title" style="color:var(--ag-custom-speed,var(--ag-text-secondary));">生成速度与延迟</span>
           <span id="speed-badge" class="key-pill pill-muted">待生成</span>
         </div>
         <div class="key-stats" style="grid-template-columns:repeat(4,1fr);">
@@ -785,13 +826,13 @@
             <div id="speed-tokens" class="key-stat-val">—</div>
           </div>
         </div>
-        <div id="speed-takeaway" class="key-takeaway">等待首次模型输出产生速度统计…</div>
+        <div id="speed-takeaway" class="key-takeaway" data-quiet="true">等待首次模型输出产生速度统计…</div>
       </div>
 
       <!-- 二级交互折叠区 1: 面板背景与指标颜色自定义（就近放置于面板 B 内部） -->
       <div class="tech-drawer">
         <button id="btn-toggle-colors" class="drawer-trigger" aria-expanded="false" type="button">
-          <span class="drawer-trigger-left"><span>🎨 指标与背景颜色自定义（默认跟随主题）</span></span>
+          <span class="drawer-trigger-left"><span>外观与配色自定义（默认跟随主题）</span></span>
           <span id="color-drawer-arrow" class="drawer-arrow">▼ 展开设置</span>
         </button>
         <div id="color-drawer-body" class="drawer-body" style="display:none;">
@@ -847,7 +888,7 @@
             <div class="color-item">
               <span class="color-item-lbl">其他 token 指标</span>
               <div class="color-item-ctrls">
-                <input id="color-tokenAccent" class="color-picker" type="color" value="#a78bfa" aria-label="其他 token 指标颜色" />
+                <input id="color-tokenAccent" class="color-picker" type="color" value="#d97757" aria-label="其他 token 指标颜色" />
                 <button id="swatch-tokenAccent" class="color-swatch-btn" type="button" data-color-slot="tokenAccent" data-color-label="其他 token 指标" title="点击打开颜色选取器"></button>
                 <button id="reset-tokenAccent" class="color-reset-btn" type="button" data-mode="auto">跟随主题</button>
               </div>
@@ -864,7 +905,7 @@
       <div class="tech-drawer">
         <button id="btn-toggle-details" class="drawer-trigger" aria-expanded="false" type="button">
           <span class="drawer-trigger-left">
-            <span>📋 底层技术参数与附件审计</span>
+            <span>底层技术参数与附件审计</span>
           </span>
           <span id="drawer-arrow" class="drawer-arrow">▼ 点击展开明细</span>
         </button>
@@ -886,10 +927,10 @@
   <section id="panel-tokens" class="ag-panel" hidden aria-label="Token 用量一览">
     <div class="panel-header-bar">
       <div class="panel-title panel-title-tokens">
-        <span id="panel-tokens-title" style="font-size:13px;font-weight:600;color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">🔥 Token 用量一览</span>
+        <span id="panel-tokens-title" style="font-size:13px;font-weight:600;color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">Token 用量一览</span>
       </div>
       <div class="panel-header-actions">
-        <button id="theme-toggle-tokens" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">🌓</button>
+        <button id="theme-toggle-tokens" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">自动</button>
         <button id="close-tokens" class="panel-icon-btn" type="button" aria-label="收起详情">×</button>
       </div>
     </div>
@@ -902,7 +943,7 @@
           <div class="t-card-sub" id="t-total-sub">读取中...</div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>今日使用</span><span style="color:var(--ag-custom-token-accent,#0284c7)">Today</span></div>
+          <div class="t-card-lbl"><span>今日使用</span><span style="color:var(--ag-custom-token-accent,#d97757)">Today</span></div>
           <div class="t-card-val" id="t-today-val">--</div>
           <div class="t-card-sub" id="t-today-sub">读取中...</div>
         </div>
@@ -964,14 +1005,22 @@
       <!-- 二级交互折叠区（就近放置于面板 A 内部）：面板背景色 + 热力图 5 档色阶预设、5 档逐格独立自定义与两端插值自定义 -->
       <div class="tech-drawer" style="margin-top:2px">
         <button id="btn-toggle-token-colors" class="drawer-trigger" aria-expanded="false" type="button">
-          <span class="drawer-trigger-left"><span>🎨 热力图色阶与面板外观自定义（默认跟随主题）</span></span>
+          <span class="drawer-trigger-left"><span>热力图色阶与面板外观（默认跟随主题）</span></span>
           <span id="token-color-drawer-arrow" class="drawer-arrow">▼ 展开设置</span>
         </button>
         <div id="token-color-drawer-body" class="drawer-body" style="display:none;">
           <div class="heat-preset-bar">
             <span style="font-size:11px;color:var(--ag-text-secondary);font-weight:500">5 档色阶预设：</span>
             <div class="heat-preset-group" id="heat-preset-group">
-              <button class="heat-preset-btn" type="button" data-heat-preset="purple" data-active="true">
+              <button class="heat-preset-btn" type="button" data-heat-preset="terracotta" data-active="true">
+                <span class="heat-preset-dots"><i style="background:#262523"></i><i style="background:#543225"></i><i style="background:#8a4832"></i><i style="background:#b85c3e"></i><i style="background:#d97757"></i></span>
+                <span>暖陶色</span>
+              </button>
+              <button class="heat-preset-btn" type="button" data-heat-preset="mono" data-active="false">
+                <span class="heat-preset-dots"><i style="background:#242426"></i><i style="background:#3f3f46"></i><i style="background:#71717a"></i><i style="background:#a1a1aa"></i><i style="background:#e4e4e7"></i></span>
+                <span>石墨灰</span>
+              </button>
+              <button class="heat-preset-btn" type="button" data-heat-preset="purple" data-active="false">
                 <span class="heat-preset-dots"><i style="background:#27272a"></i><i style="background:#3f1e6b"></i><i style="background:#652ab7"></i><i style="background:#9053f8"></i><i style="background:#c084fc"></i></span>
                 <span>紫色系</span>
               </button>
@@ -1003,7 +1052,7 @@
               <div class="heat-lvl-item">
                 <span class="heat-lvl-lbl" title="第 1 档（少/无用量）">1档 · 少/无</span>
                 <div class="color-item-ctrls">
-                  <input id="color-heatLvl0" class="color-picker" type="color" value="#27272a" aria-label="热力图第1档颜色" />
+                  <input id="color-heatLvl0" class="color-picker" type="color" value="#262523" aria-label="热力图第1档颜色" />
                   <button id="swatch-heatLvl0" class="color-swatch-btn" type="button" data-color-slot="heatLvl0" data-color-label="色阶第 1 档（少/无用量）" title="点击单独设置第 1 档颜色"></button>
                   <button id="reset-heatLvl0" class="color-reset-btn" type="button" data-mode="auto">预设</button>
                 </div>
@@ -1011,7 +1060,7 @@
               <div class="heat-lvl-item">
                 <span class="heat-lvl-lbl" title="第 2 档（低用量）">2档 · 低</span>
                 <div class="color-item-ctrls">
-                  <input id="color-heatLvl1" class="color-picker" type="color" value="#3f1e6b" aria-label="热力图第2档颜色" />
+                  <input id="color-heatLvl1" class="color-picker" type="color" value="#543225" aria-label="热力图第2档颜色" />
                   <button id="swatch-heatLvl1" class="color-swatch-btn" type="button" data-color-slot="heatLvl1" data-color-label="色阶第 2 档（低用量）" title="点击单独设置第 2 档颜色"></button>
                   <button id="reset-heatLvl1" class="color-reset-btn" type="button" data-mode="auto">预设</button>
                 </div>
@@ -1019,7 +1068,7 @@
               <div class="heat-lvl-item">
                 <span class="heat-lvl-lbl" title="第 3 档（中等用量）">3档 · 中</span>
                 <div class="color-item-ctrls">
-                  <input id="color-heatLvl2" class="color-picker" type="color" value="#652ab7" aria-label="热力图第3档颜色" />
+                  <input id="color-heatLvl2" class="color-picker" type="color" value="#8a4832" aria-label="热力图第3档颜色" />
                   <button id="swatch-heatLvl2" class="color-swatch-btn" type="button" data-color-slot="heatLvl2" data-color-label="色阶第 3 档（中等用量）" title="点击单独设置第 3 档颜色"></button>
                   <button id="reset-heatLvl2" class="color-reset-btn" type="button" data-mode="auto">预设</button>
                 </div>
@@ -1027,7 +1076,7 @@
               <div class="heat-lvl-item">
                 <span class="heat-lvl-lbl" title="第 4 档（高用量）">4档 · 高</span>
                 <div class="color-item-ctrls">
-                  <input id="color-heatLvl3" class="color-picker" type="color" value="#9053f8" aria-label="热力图第4档颜色" />
+                  <input id="color-heatLvl3" class="color-picker" type="color" value="#b85c3e" aria-label="热力图第4档颜色" />
                   <button id="swatch-heatLvl3" class="color-swatch-btn" type="button" data-color-slot="heatLvl3" data-color-label="色阶第 4 档（高用量）" title="点击单独设置第 4 档颜色"></button>
                   <button id="reset-heatLvl3" class="color-reset-btn" type="button" data-mode="auto">预设</button>
                 </div>
@@ -1035,7 +1084,7 @@
               <div class="heat-lvl-item">
                 <span class="heat-lvl-lbl" title="第 5 档（多/峰值用量）">5档 · 多/峰</span>
                 <div class="color-item-ctrls">
-                  <input id="color-heatLvl4" class="color-picker" type="color" value="#c084fc" aria-label="热力图第5档颜色" />
+                  <input id="color-heatLvl4" class="color-picker" type="color" value="#d97757" aria-label="热力图第5档颜色" />
                   <button id="swatch-heatLvl4" class="color-swatch-btn" type="button" data-color-slot="heatLvl4" data-color-label="色阶第 5 档（多/峰值用量）" title="点击单独设置第 5 档颜色"></button>
                   <button id="reset-heatLvl4" class="color-reset-btn" type="button" data-mode="auto">预设</button>
                 </div>
@@ -1047,7 +1096,7 @@
             <div class="color-item">
               <span class="color-item-lbl">色阶「少」端颜色（自动插值）</span>
               <div class="color-item-ctrls">
-                <input id="color-heatLow" class="color-picker" type="color" value="#27272a" aria-label="热力图少端颜色" />
+                <input id="color-heatLow" class="color-picker" type="color" value="#262523" aria-label="热力图少端颜色" />
                 <button id="swatch-heatLow" class="color-swatch-btn" type="button" data-color-slot="heatLow" data-color-label="热力图「少」端颜色" title="点击打开颜色选取器"></button>
                 <button id="reset-heatLow" class="color-reset-btn" type="button" data-mode="auto">预设</button>
               </div>
@@ -1055,7 +1104,7 @@
             <div class="color-item">
               <span class="color-item-lbl">色阶「多」端颜色（自动插值）</span>
               <div class="color-item-ctrls">
-                <input id="color-heatHigh" class="color-picker" type="color" value="#c084fc" aria-label="热力图多端颜色" />
+                <input id="color-heatHigh" class="color-picker" type="color" value="#d97757" aria-label="热力图多端颜色" />
                 <button id="swatch-heatHigh" class="color-swatch-btn" type="button" data-color-slot="heatHigh" data-color-label="热力图「多」端颜色" title="点击打开颜色选取器"></button>
                 <button id="reset-heatHigh" class="color-reset-btn" type="button" data-mode="auto">预设</button>
               </div>
@@ -1085,16 +1134,16 @@
   <div id="color-picker-popover" hidden role="dialog" aria-label="颜色选取器">
     <div class="cp-header">
       <div class="cp-title">
-        <span>🎨 颜色选取器</span>
+        <span>颜色选取器</span>
         <span id="cp-target-name" class="cp-target-lbl"></span>
       </div>
       <button id="cp-close" class="panel-icon-btn" type="button" aria-label="关闭颜色选取器">×</button>
     </div>
     <div class="cp-toolbar">
-      <button id="cp-eyedropper" class="cp-eyedropper-btn" type="button" title="从屏幕吸取颜色">🖊 取色</button>
+      <button id="cp-eyedropper" class="cp-eyedropper-btn" type="button" title="从屏幕吸取颜色">取色</button>
       <div class="cp-presets" id="cp-presets">
+        <button class="cp-preset-dot" type="button" data-cp-hex="#d97757" style="background:#d97757" title="#D97757"></button>
         <button class="cp-preset-dot" type="button" data-cp-hex="#ef4444" style="background:#ef4444" title="#EF4444"></button>
-        <button class="cp-preset-dot" type="button" data-cp-hex="#f97316" style="background:#f97316" title="#F97316"></button>
         <button class="cp-preset-dot" type="button" data-cp-hex="#eab308" style="background:#eab308" title="#EAB308"></button>
         <button class="cp-preset-dot" type="button" data-cp-hex="#22c55e" style="background:#22c55e" title="#22C55E"></button>
         <button class="cp-preset-dot" type="button" data-cp-hex="#06b6d4" style="background:#06b6d4" title="#06B6D4"></button>
@@ -1114,18 +1163,18 @@
     <div class="cp-rows">
       <div class="cp-row">
         <span class="cp-fmt-lbl">HEX</span>
-        <input id="cp-input-hex" class="cp-fmt-input" type="text" value="#652ab7" spellcheck="false" aria-label="HEX 色值输入" />
-        <button id="cp-copy-hex" class="cp-copy-btn" type="button" title="复制 HEX">📋</button>
+        <input id="cp-input-hex" class="cp-fmt-input" type="text" value="#d97757" spellcheck="false" aria-label="HEX 色值输入" />
+        <button id="cp-copy-hex" class="cp-copy-btn" type="button" title="复制 HEX">复制</button>
       </div>
       <div class="cp-row">
         <span class="cp-fmt-lbl">RGB</span>
-        <input id="cp-input-rgb" class="cp-fmt-input" type="text" value="rgb(101, 42, 183)" spellcheck="false" aria-label="RGB 色值输入" />
-        <button id="cp-copy-rgb" class="cp-copy-btn" type="button" title="复制 RGB">📋</button>
+        <input id="cp-input-rgb" class="cp-fmt-input" type="text" value="rgb(217, 119, 87)" spellcheck="false" aria-label="RGB 色值输入" />
+        <button id="cp-copy-rgb" class="cp-copy-btn" type="button" title="复制 RGB">复制</button>
       </div>
       <div class="cp-row">
         <span class="cp-fmt-lbl">HSL</span>
-        <input id="cp-input-hsl" class="cp-fmt-input" type="text" value="hsl(265, 63%, 44%)" spellcheck="false" aria-label="HSL 色值输入" />
-        <button id="cp-copy-hsl" class="cp-copy-btn" type="button" title="复制 HSL">📋</button>
+        <input id="cp-input-hsl" class="cp-fmt-input" type="text" value="hsl(15, 63%, 60%)" spellcheck="false" aria-label="HSL 色值输入" />
+        <button id="cp-copy-hsl" class="cp-copy-btn" type="button" title="复制 HSL">复制</button>
       </div>
     </div>
     <div class="cp-footer">
@@ -1211,9 +1260,17 @@
     heatLvl3: '',
     heatLvl4: ''
   };
-  let heatPreset = 'purple';
+  let heatPreset = 'terracotta';
 
   const HEAT_PRESETS = {
+    terracotta: {
+      dark: ['#262523', '#523025', '#874834', '#b85f43', '#d97757'],
+      light: ['#e7e5e0', '#f5d5c8', '#e8a890', '#d97757', '#a64d32']
+    },
+    mono: {
+      dark: ['#262629', '#3f3f46', '#63636e', '#9494a1', '#d4d4dc'],
+      light: ['#e4e4e7', '#d1d1d6', '#a1a1aa', '#63636e', '#27272a']
+    },
     purple: {
       dark: ['#27272a', '#3f1e6b', '#652ab7', '#9053f8', '#c084fc'],
       light: ['#e4e4e7', '#e9d5ff', '#c084fc', '#9333ea', '#6b21a8']
@@ -1368,8 +1425,8 @@
   }
 
   function interpolateHex(hexA, hexB, t) {
-    const a = hexToRgb(hexA) || { r: 39, g: 39, b: 42 };
-    const b = hexToRgb(hexB) || { r: 192, g: 132, b: 252 };
+    const a = hexToRgb(hexA) || { r: 38, g: 37, b: 35 };
+    const b = hexToRgb(hexB) || { r: 217, g: 119, b: 87 };
     const ratio = clampNum(t, 0, 1);
     return rgbToHex(
       a.r + (b.r - a.r) * ratio,
@@ -1434,7 +1491,7 @@
 
   function getPresetHeatmapScale() {
     const isLight = resolveTheme() === 'light';
-    const presetObj = HEAT_PRESETS[heatPreset] || HEAT_PRESETS.purple;
+    const presetObj = HEAT_PRESETS[heatPreset] || HEAT_PRESETS.terracotta;
     return (isLight ? presetObj.light : presetObj.dark).slice();
   }
 
@@ -1475,8 +1532,8 @@
       case 'ringTrack': return isLight ? '#b8b8c2' : '#52525b';
       case 'contextText': return isLight ? '#18181b' : '#ececef';
       case 'speedText': return isLight ? '#0284c7' : '#38bdf8';
-      case 'tokenTotal': return isLight ? '#7c3aed' : '#c084fc';
-      case 'tokenAccent': return isLight ? '#7c3aed' : '#a78bfa';
+      case 'tokenTotal': return isLight ? '#c6613f' : '#d97757';
+      case 'tokenAccent': return isLight ? '#c6613f' : '#d97757';
       case 'heatLow': return presetScale[0];
       case 'heatHigh': return presetScale[4];
       case 'heatLvl0': return baseScale[0];
@@ -1484,7 +1541,7 @@
       case 'heatLvl2': return baseScale[2];
       case 'heatLvl3': return baseScale[3];
       case 'heatLvl4': return baseScale[4];
-      default: return '#7748cf';
+      default: return '#d97757';
     }
   }
 
@@ -1632,7 +1689,7 @@
 
   function resetCustomColors() {
     for (const key of Object.keys(COLOR_SLOTS)) customColors[key] = '';
-    heatPreset = 'purple';
+    heatPreset = 'terracotta';
     saveCustomColors();
     applyCustomColors();
   }
@@ -1645,13 +1702,13 @@
     const btns = [el('theme-toggle'), el('theme-toggle-tokens')].filter(Boolean);
     btns.forEach(btn => {
       if (currentThemeMode === 'auto') {
-        btn.textContent = activeTheme === 'light' ? '🌗' : '🌓';
+        btn.textContent = '自动';
         btn.title = `当前主题：跟随宿主 (${activeTheme === 'light' ? '浅色' : '深色'})\n点击切换为：浅色模式`;
       } else if (currentThemeMode === 'light') {
-        btn.textContent = '☀️';
+        btn.textContent = '浅色';
         btn.title = '当前主题：浅色模式 (固定)\n点击切换为：深色模式';
       } else {
-        btn.textContent = '🌙';
+        btn.textContent = '深色';
         btn.title = '当前主题：深色模式 (固定)\n点击切换为：跟随宿主';
       }
     });
@@ -2897,12 +2954,11 @@
   function getFirstUseDateStr() {
     const map = ANTIGRAVITY_TOKEN_DATA.dailyMap || {};
     const keys = Object.keys(map).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && (map[k]?.total > 0)).sort();
-    const declared = ANTIGRAVITY_TOKEN_DATA.firstUseDate;
-    if (declared && /^\d{4}-\d{2}-\d{2}$/.test(declared)) {
-      if (keys.length && keys[0] < declared) return keys[0];
-      return declared;
-    }
     if (keys.length) return keys[0];
+    const declaredToken = ANTIGRAVITY_TOKEN_DATA.firstTokenDate;
+    if (declaredToken && /^\d{4}-\d{2}-\d{2}$/.test(declaredToken)) return declaredToken;
+    const declared = ANTIGRAVITY_TOKEN_DATA.firstUseDate;
+    if (declared && /^\d{4}-\d{2}-\d{2}$/.test(declared)) return declared;
     return formatLocalYmd(new Date());
   }
 
@@ -2969,6 +3025,14 @@
       }
     }
     ANTIGRAVITY_TOKEN_DATA.dailyMap = newMap;
+    if (payload.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstTokenDate)) {
+      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = payload.firstTokenDate;
+    } else if (payload.summary?.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstTokenDate)) {
+      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = payload.summary.firstTokenDate;
+    }
+    if (payload.firstInstallDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstInstallDate)) {
+      ANTIGRAVITY_TOKEN_DATA.firstInstallDate = payload.firstInstallDate;
+    }
     if (payload.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstUseDate)) {
       ANTIGRAVITY_TOKEN_DATA.firstUseDate = payload.firstUseDate;
     } else if (payload.summary?.firstUseDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstUseDate)) {
@@ -2976,36 +3040,67 @@
     }
     if (payload.updatedAt) ANTIGRAVITY_TOKEN_DATA.updatedAt = payload.updatedAt;
 
-    // 重新汇总卡片统计
+    // 重新汇总卡片统计（今日无记录如实显示 0，不拿旧活跃日数据冒充今日）
     const map = ANTIGRAVITY_TOKEN_DATA.dailyMap;
     const keys = Object.keys(map).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && map[k]?.total > 0).sort();
+    if (keys.length) {
+      ANTIGRAVITY_TOKEN_DATA.firstTokenDate = keys[0];
+      ANTIGRAVITY_TOKEN_DATA.firstUseDate = keys[0];
+    }
     const todayStr = formatLocalYmd(new Date());
     const monthPrefix = todayStr.slice(0, 7);
     const yearPrefix = todayStr.slice(0, 4);
     let totalTokens = 0, todayTokens = 0, monthTokens = 0, yearTokens = 0, monthDays = 0;
+    let totalInput = 0, totalOutput = 0, totalCache = 0;
+    let todayInput = 0, todayOutput = 0, todayCache = 0, todaySteps = 0;
     for (const k of keys) {
-      const t = Number(map[k]?.total) || 0;
+      const rec = map[k];
+      const t = Number(rec?.total) || 0;
+      const inp = Number(rec?.input) || 0;
+      const out = Number(rec?.output) || 0;
+      const cac = Number(rec?.cache) || 0;
+      const stp = Number(rec?.steps) || 0;
       totalTokens += t;
-      if (k === todayStr) todayTokens += t;
+      totalInput += inp;
+      totalOutput += out;
+      totalCache += cac;
+      if (k === todayStr) {
+        todayTokens += t;
+        todayInput += inp;
+        todayOutput += out;
+        todayCache += cac;
+        todaySteps += stp;
+      }
       if (k.startsWith(monthPrefix)) {
         monthTokens += t;
         monthDays += 1;
       }
       if (k.startsWith(yearPrefix)) yearTokens += t;
     }
-    const latestActiveKey = keys[keys.length - 1] || todayStr;
-    const shownToday = todayTokens > 0 ? todayTokens : (Number(map[latestActiveKey]?.total) || 0);
+    const latestActiveKey = keys[keys.length - 1] || null;
     const convCount = Number(payload.summary?.totalConversations) || Number(ANTIGRAVITY_TOKEN_DATA.summary?.totalConversations) || keys.length;
     const avgMonth = monthDays > 0 ? Math.round(monthTokens / monthDays) : 0;
+    const totalNet = totalInput + totalOutput;
+    const totalCachePct = totalTokens > 0 ? Math.round((totalCache / totalTokens) * 100) : 0;
+    const todayNet = todayInput + todayOutput;
+    const todayCachePct = todayTokens > 0 ? Math.round((todayCache / todayTokens) * 100) : 0;
 
     ANTIGRAVITY_TOKEN_DATA.summary = {
       grandTotalTokens: totalTokens,
       totalTokens,
-      todayTokens: shownToday,
+      netTokens: totalNet,
+      cacheTokens: totalCache,
+      cacheRatio: totalTokens > 0 ? Number((totalCache / totalTokens).toFixed(4)) : 0,
+      todayTokens,
+      todaySteps,
+      todayNetTokens: todayNet,
+      todayCacheRatio: todayTokens > 0 ? Number((todayCache / todayTokens).toFixed(4)) : 0,
       monthTokens,
       yearTokens,
       totalDays: keys.length,
-      totalConversations: convCount
+      totalConversations: convCount,
+      firstTokenDate: keys[0] || ANTIGRAVITY_TOKEN_DATA.firstTokenDate || null,
+      firstUseDate: keys[0] || ANTIGRAVITY_TOKEN_DATA.firstUseDate || null
     };
 
     const fmtCardM = v => {
@@ -3019,7 +3114,7 @@
     const badgeExtra = el('token-hover-extra');
     const overAmt = el('overflow-tokens-val');
     if (badgeAmt) badgeAmt.textContent = fmtCardM(totalTokens);
-    if (badgeExtra) badgeExtra.textContent = `· 今日 ${fmtCardM(shownToday)}`;
+    if (badgeExtra) badgeExtra.textContent = `· 今日 ${fmtCardM(todayTokens)}`;
     if (overAmt) overAmt.textContent = fmtCardM(totalTokens);
 
     const tTotalVal = el('t-total-val');
@@ -3032,13 +3127,21 @@
     const tYearSub = el('t-year-sub');
 
     if (tTotalVal) tTotalVal.textContent = fmtCardM(totalTokens);
-    if (tTotalSub) tTotalSub.textContent = `${totalTokens.toLocaleString('en-US')} Tokens`;
-    if (tTodayVal) tTodayVal.textContent = fmtCardM(shownToday);
-    if (tTodaySub) tTodaySub.textContent = `${convCount} 会话实时累加`;
+    if (tTotalSub) tTotalSub.textContent = `净消耗 ${fmtCardM(totalNet)} · 缓存复用 ${totalCachePct}%`;
+    if (tTodayVal) tTodayVal.textContent = fmtCardM(todayTokens);
+    if (tTodaySub) {
+      if (todayTokens > 0) {
+        tTodaySub.textContent = `${todaySteps} 步请求 · 净 ${fmtCardM(todayNet)} · 缓存 ${todayCachePct}%`;
+      } else if (latestActiveKey && latestActiveKey !== todayStr) {
+        tTodaySub.textContent = `0 步请求 · 最近活跃 ${latestActiveKey.slice(5)}`;
+      } else {
+        tTodaySub.textContent = '0 步请求 · 今日暂无记录';
+      }
+    }
     if (tMonthVal) tMonthVal.textContent = fmtCardM(monthTokens);
     if (tMonthSub) tMonthSub.textContent = `日均约 ${fmtCardM(avgMonth)}`;
     if (tYearVal) tYearVal.textContent = fmtCardM(yearTokens);
-    if (tYearSub) tYearSub.textContent = `${keys.length} 天活动记录`;
+    if (tYearSub) tYearSub.textContent = `${keys.length} 天活动记录 · ${convCount} 会话`;
 
     computeTimelineWindow();
     renderActiveHeatView(true);
@@ -3308,7 +3411,7 @@
   }
 
   // 初始化首次使用日与时间轴显示并触发后台完整历史同步
-  computeTimelineWindow();
+  applyTokenHistoryPayload(ANTIGRAVITY_TOKEN_DATA);
   void syncTokenHistoryFromHost();
 
   function updateRingAndBubble(d, session, pct, danger, stale, incomplete) {
@@ -3558,8 +3661,71 @@
         if (keyBadge) { keyBadge.textContent = d?.estimated ? '估算' : '读取中'; keyBadge.className = 'key-pill pill-muted'; }
         if (keyUsed) keyUsed.textContent = d?.estimate ? `约 ${short(d.estimate)}` : (session ? short(session.total.low) : '—');
         if (keyLimit) keyLimit.textContent = d?.budget ? short(d.budget) : '—';
-        if (keyRemaining) keyRemaining.textContent = '待确认';
+        if (keyRemaining) keyRemaining.textContent = '—';
         if (keyTakeaway) keyTakeaway.textContent = 'ℹ 当前主要依赖本地估算或待服务端返回实际统计，暂不计算精确剩余空间。';
+      }
+
+      if (keyTakeaway) {
+        const isKeyAlert = Boolean(d?.exceeded || d?.error || stale || incomplete || (pct != null && pct >= 75));
+        keyTakeaway.setAttribute('data-quiet', isKeyAlert ? 'false' : 'true');
+      }
+
+      // 渲染上下文构成比例微条与最近请求缓存命中率
+      const ctxCacheHit = el('ctx-cache-hit');
+      if (ctxCacheHit) {
+        if (d?.input > 0) {
+          const hitPct = Math.min(100, Math.round(((d.cached || 0) / d.input) * 100));
+          ctxCacheHit.textContent = `缓存命中 ${hitPct}%`;
+        } else {
+          ctxCacheHit.textContent = '缓存命中 —';
+        }
+      }
+
+      const bdText = el('ctx-breakdown-text');
+      const segIds = ['bd-seg-tools', 'bd-seg-system', 'bd-seg-user', 'bd-seg-assistant', 'bd-seg-thinking', 'bd-seg-attachments'];
+      const midVal = g => g ? Math.round(((Number(g.low) || 0) + (Number(g.high) || 0)) / 2) : 0;
+      if (session && session.groups) {
+        const vTools = midVal(session.groups.tools);
+        const vSystem = midVal(session.groups.system) + midVal(session.groups.definitions);
+        const vUser = midVal(session.groups.user);
+        const vAssistant = midVal(session.groups.assistant) + midVal(session.groups.summaries);
+        const vThinking = midVal(session.groups.thinking);
+        const vAttach = midVal(session.attachmentTotal);
+        const vTotal = vTools + vSystem + vUser + vAssistant + vThinking + vAttach;
+        const segments = [
+          { id: 'bd-seg-tools', label: '工具', v: vTools },
+          { id: 'bd-seg-system', label: '系统', v: vSystem },
+          { id: 'bd-seg-user', label: '用户', v: vUser },
+          { id: 'bd-seg-assistant', label: '回复', v: vAssistant },
+          { id: 'bd-seg-thinking', label: '思考', v: vThinking },
+          { id: 'bd-seg-attachments', label: '附件', v: vAttach }
+        ];
+        if (vTotal > 0) {
+          for (const s of segments) {
+            const segEl = el(s.id);
+            if (segEl) segEl.style.width = `${((s.v / vTotal) * 100).toFixed(1)}%`;
+          }
+          const topParts = segments
+            .filter(s => s.v > 0)
+            .sort((a, b) => b.v - a.v)
+            .slice(0, 4)
+            .map(s => `${s.label} ${Math.max(1, Math.round((s.v / vTotal) * 100))}%`);
+          if (bdText) bdText.textContent = `构成：${topParts.join(' · ')}`;
+        } else {
+          for (const sid of segIds) {
+            const segEl = el(sid);
+            if (segEl) segEl.style.width = '0%';
+          }
+          if (bdText) bdText.textContent = '构成：当前会话暂无正文负载';
+        }
+      } else {
+        for (const sid of segIds) {
+          const segEl = el(sid);
+          if (segEl) segEl.style.width = '0%';
+        }
+        if (bdText) {
+          bdText.textContent = state.scanBusy ? '构成：正在扫描会话归档…' : (state.scanError ? '构成：会话归档未就绪' : '构成：待扫描会话归档');
+        }
       }
     }
 
@@ -3594,6 +3760,11 @@
         if (spTtft) spTtft.textContent = '—';
         if (spTokens) spTokens.textContent = '—';
         if (spTakeaway) spTakeaway.textContent = 'ℹ 等待当前或下一次模型输出完成，将自动计算精确输出速度 (tok/s)、首字延迟与总耗时。';
+      }
+
+      if (spTakeaway) {
+        const isSpeedAlert = Boolean(sp?.tps != null && sp.tps < 15);
+        spTakeaway.setAttribute('data-quiet', isSpeedAlert ? 'false' : 'true');
       }
     }
 

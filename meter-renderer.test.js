@@ -578,6 +578,97 @@ test('native Overview Panel mutual exclusion and z-index stacking elevation prev
   api.dispose();
 });
 
+test('Direction B: terracotta & mono presets, Today card accuracy when today is 0 vs active, and 5-month blank deadzone elimination', () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
 
+  // 1) Default preset is Claude warm terracotta (#d97757 dark top stop) and mono preset is supported
+  assert.equal(api.getHeatPreset(), 'terracotta');
+  assert.equal(api.getHeatPalette()[4], '#d97757');
+  api.setHeatPreset('mono');
+  assert.equal(api.getHeatPreset(), 'mono');
+  assert.equal(api.getHeatPalette()[4], '#d4d4dc');
+  api.setHeatPreset('terracotta');
+
+  // 2) When firstInstallDate/firstUseDate is 5 months earlier (2026-05-15) than earliest token date (2026-10-20),
+  //    timeline starts at 2026-10-20 with zero leading blank weeks, and Today card shows 0 when today has no records
+  api.setTokenHistoryForTest({
+    firstInstallDate: '2026-05-15',
+    firstUseDate: '2026-05-15',
+    firstTokenDate: '2026-10-20',
+    summary: { totalConversations: 42 },
+    dailyMap: {
+      '2026-10-20': { total: 10000000, input: 1500000, output: 500000, cache: 8000000, steps: 25 }
+    }
+  });
+  const win = api.getTimelineWindow();
+  assert.equal(win.firstUseDate, '2026-10-20');
+  assert.equal(win.winStart, '2026-10-20');
+  assert.equal(h.elements.get('t-total-val').textContent, '10.0M');
+  assert.match(h.elements.get('t-total-sub').textContent, /净消耗 2\.0M · 缓存复用 80%/);
+  assert.equal(h.elements.get('t-today-val').textContent, '0');
+  assert.match(h.elements.get('t-today-sub').textContent, /0 步请求 · 最近活跃 10-20/);
+
+  // 3) When today has active records, Today card shows todayTokens, todaySteps, net consumption, and cache reuse %
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  api.setTokenHistoryForTest({
+    firstTokenDate: '2026-10-20',
+    dailyMap: {
+      '2026-10-20': { total: 10000000, input: 1500000, output: 500000, cache: 8000000, steps: 25 },
+      [todayStr]: { total: 5000000, input: 800000, output: 200000, cache: 4000000, steps: 12 }
+    }
+  });
+  assert.equal(h.elements.get('t-today-val').textContent, '5.0M');
+  assert.match(h.elements.get('t-today-sub').textContent, /12 步请求 · 净 1\.0M · 缓存 80%/);
+
+  api.dispose();
+});
+
+test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Default takeaway behavior', async () => {
+  const s = session();
+  s.groups.tools = { chars: 100000, bytes: 100000, low: 45000, high: 55000 };
+  s.groups.system = { chars: 40000, bytes: 40000, low: 18000, high: 22000 };
+  s.groups.user = { chars: 20000, bytes: 20000, low: 9000, high: 11000 };
+  s.groups.assistant = { chars: 20000, bytes: 20000, low: 9000, high: 11000 };
+  s.total = { chars: 180000, bytes: 180000, low: 81000, high: 99000 };
+
+  const h = harness(s);
+  h.finishScan();
+  h.pending[0].resolve(response({
+    model: 'Claude Opus 4.6',
+    timeToFirstToken: '0.5s',
+    streamingDuration: '1.5s',
+    usage: { inputTokens: 20000, cacheReadTokens: 80000, outputTokens: 200 },
+    chatStartMetadata: { contextWindowMetadata: { estimatedTokensUsed: 95000, maxContextTokens: 200000 } }
+  }));
+  await h.flush();
+
+  // Healthy state (50.1% < 75%, speed 100 tok/s >= 15): both takeaways are quiet by default
+  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'true');
+  assert.equal(h.elements.get('speed-takeaway').getAttribute('data-quiet'), 'true');
+  // Cache hit rate: 80000 / 100000 = 80%
+  assert.equal(h.elements.get('ctx-cache-hit').textContent, '缓存命中 80%');
+  // Context breakdown text & segment widths
+  assert.match(h.elements.get('ctx-breakdown-text').textContent, /构成：工具 56% · 系统 22%/);
+  assert.equal(h.elements.get('bd-seg-tools').style.width, '55.6%');
+
+  // High occupancy (85% >= 75%) and slow speed (10 tok/s < 15) un-quiets both takeaways
+  h.sandbox.location.pathname = '/c/33333333-3333-3333-3333-333333333333';
+  h.tick();
+  h.finishScan(1);
+  h.pending[1].resolve(response({
+    model: 'Claude Opus 4.6',
+    timeToFirstToken: '5.0s',
+    streamingDuration: '5.0s',
+    usage: { inputTokens: 50000, cacheReadTokens: 120000, outputTokens: 100 },
+    chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 200000 } }
+  }));
+  await h.flush();
+  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'false');
+  assert.equal(h.elements.get('speed-takeaway').getAttribute('data-quiet'), 'false');
+
+  h.sandbox.__AGContextMeter.dispose();
+});
 
 

@@ -231,6 +231,8 @@ async function collect(origin, id, options = {}) {
 
 let cachedTokenHistory = null;
 let cachedTokenHistoryAt = 0;
+let cachedTokenHistoryHome = '';
+const transcriptFileCache = new Map();
 
 function formatLocalDateKey(dateObj) {
   const y = dateObj.getFullYear();
@@ -239,25 +241,78 @@ function formatLocalDateKey(dateObj) {
   return `${y}-${m}-${d}`;
 }
 
+function parsePlannerStepLine(line) {
+  if (!line || typeof line !== 'string') return null;
+  if (!line.includes('PLANNER_RESPONSE')) return null;
+  if (!line.includes('"input_tokens"') && !line.includes('"output_tokens"') && !line.includes('"cache_read_tokens"') &&
+      !line.includes('"inputTokens"') && !line.includes('"outputTokens"') && !line.includes('"cacheReadTokens"')) {
+    return null;
+  }
+  try {
+    const obj = JSON.parse(line);
+    if (!obj || typeof obj !== 'object') return null;
+    const stepType = String(obj.type || obj.stepType || '');
+    const isPlanner = stepType === 'PLANNER_RESPONSE' || stepType === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' || Boolean(obj.plannerResponse);
+    if (!isPlanner) return null;
+    const meta = (obj.metadata && typeof obj.metadata === 'object') ? obj.metadata : obj;
+    const createdAt = meta.created_at || meta.createdAt || obj.created_at || obj.createdAt || null;
+    const usage = meta.token_usage || meta.tokenUsage || meta.usage || meta.model_usage || meta.modelUsage ||
+      obj.token_usage || obj.tokenUsage || obj.usage || obj.plannerResponse?.token_usage || obj.plannerResponse?.usage ||
+      ((obj.input_tokens !== undefined || obj.output_tokens !== undefined || obj.cache_read_tokens !== undefined ||
+        obj.inputTokens !== undefined || obj.outputTokens !== undefined || obj.cacheReadTokens !== undefined) ? obj : null);
+    let inp = 0, outp = 0, cap = 0;
+    if (usage && typeof usage === 'object') {
+      inp = Number(usage.input_tokens ?? usage.inputTokens ?? 0) || 0;
+      outp = Number(usage.output_tokens ?? usage.outputTokens ?? 0) || 0;
+      cap = Number(usage.cache_read_tokens ?? usage.cacheReadTokens ?? 0) || 0;
+    } else if (obj.metadata && typeof obj.metadata === 'object') {
+      const metaJson = JSON.stringify(obj.metadata);
+      inp = Number((metaJson.match(/"input_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+      outp = Number((metaJson.match(/"output_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+      cap = Number((metaJson.match(/"cache_read_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+    }
+    const tot = inp + outp + cap;
+    if (tot <= 0) return null;
+    return { createdAt, input: inp, output: outp, cache: cap, total: tot };
+  } catch {
+    if (!/^\s*\{\s*"type"\s*:\s*"(?:CORTEX_STEP_TYPE_)?PLANNER_RESPONSE"/.test(line)) return null;
+    const mDate = line.match(/"created_at"\s*:\s*"([^"]+)"/);
+    const inp = Number((line.match(/"input_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+    const outp = Number((line.match(/"output_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+    const cap = Number((line.match(/"cache_read_tokens"\s*:\s*(\d+)/) || [])[1] || 0);
+    const tot = inp + outp + cap;
+    if (tot <= 0) return null;
+    return { createdAt: mDate ? mDate[1] : null, input: inp, output: outp, cache: cap, total: tot };
+  }
+}
+
 function collectTokenHistory(options = {}) {
-  if (!options.force && cachedTokenHistory && Date.now() - cachedTokenHistoryAt < 15000) {
+  const home = options.homeDir || process.env.USERPROFILE || os.homedir();
+  if (!options.force && cachedTokenHistory && cachedTokenHistoryHome === home && Date.now() - cachedTokenHistoryAt < 15000) {
     return cachedTokenHistory;
   }
-  const home = process.env.USERPROFILE || os.homedir();
   const agDir = path.join(home, '.gemini', 'antigravity');
   const brainDir = path.join(agDir, 'brain');
   const convDir = path.join(agDir, 'conversations');
   const archivePath = path.join(agDir, 'token_usage_archive_v1.json');
 
-  let archive = { firstUseDate: null, dailyMap: {}, maxConversations: 0 };
+  let archive = { schemaVersion: 0, firstUseDate: null, firstInstallDate: null, firstTokenDate: null, dailyMap: {}, maxConversations: 0 };
   try {
     if (fs.existsSync(archivePath)) {
       const raw = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
       if (raw && typeof raw === 'object') {
+        archive.schemaVersion = Number(raw.schemaVersion) || 0;
+        if (typeof raw.firstInstallDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.firstInstallDate)) {
+          archive.firstInstallDate = raw.firstInstallDate;
+        }
+        if (typeof raw.firstTokenDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.firstTokenDate)) {
+          archive.firstTokenDate = raw.firstTokenDate;
+        }
         if (typeof raw.firstUseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.firstUseDate)) {
           archive.firstUseDate = raw.firstUseDate;
         }
-        if (raw.dailyMap && typeof raw.dailyMap === 'object') {
+        // Only merge dailyMap from schemaVersion >= 2 to purge v1 regex false-positive inflation
+        if (archive.schemaVersion >= 2 && raw.dailyMap && typeof raw.dailyMap === 'object') {
           archive.dailyMap = raw.dailyMap;
         }
         if (typeof raw.maxConversations === 'number') {
@@ -267,14 +322,14 @@ function collectTokenHistory(options = {}) {
     }
   } catch {}
 
-  let earliestDate = archive.firstUseDate || null;
-  const registerDate = (dateStr) => {
+  let earliestInstallDate = archive.firstInstallDate || archive.firstUseDate || null;
+  const registerInstallDate = (dateStr) => {
     if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      if (!earliestDate || dateStr < earliestDate) earliestDate = dateStr;
+      if (!earliestInstallDate || dateStr < earliestInstallDate) earliestInstallDate = dateStr;
     }
   };
 
-  // 1. Check conversations/*.pb timestamps for earliest local Antigravity usage
+  // 1. Check conversations/*.pb timestamps for earliest local Antigravity installation/session
   let pbCount = 0;
   try {
     if (fs.existsSync(convDir)) {
@@ -285,14 +340,14 @@ function collectTokenHistory(options = {}) {
           if (st.isFile()) {
             pbCount++;
             const ts = st.birthtimeMs && st.birthtimeMs > 946684800000 ? Math.min(st.birthtimeMs, st.mtimeMs) : st.mtimeMs;
-            if (ts > 946684800000) registerDate(formatLocalDateKey(new Date(ts)));
+            if (ts > 946684800000) registerInstallDate(formatLocalDateKey(new Date(ts)));
           }
         } catch {}
       }
     }
   } catch {}
 
-  // 2. Walk brain/**/transcript.jsonl for complete step & token history
+  // 2. Walk brain/**/transcript.jsonl for complete step & token history (with per-file stat cache)
   const transcriptFiles = [];
   const walkBrain = (dir) => {
     try {
@@ -309,46 +364,57 @@ function collectTokenHistory(options = {}) {
   const scannedDaily = {};
   for (const file of transcriptFiles) {
     try {
-      const content = fs.readFileSync(file, 'utf8');
-      const lines = content.split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-        let dateKey = null;
-        const mDate = line.match(/"created_at":"([^"]+)"/);
-        if (mDate) {
-          const d = new Date(mDate[1]);
-          if (!Number.isNaN(d.getTime())) {
-            dateKey = formatLocalDateKey(d);
-            registerDate(dateKey);
-          }
-        }
-        if (line.includes('"input_tokens":') || line.includes('"output_tokens":') || line.includes('"cache_read_tokens":')) {
-          const inp = Number((line.match(/"input_tokens":(\d+)/) || [])[1] || 0);
-          const outp = Number((line.match(/"output_tokens":(\d+)/) || [])[1] || 0);
-          const cap = Number((line.match(/"cache_read_tokens":(\d+)/) || [])[1] || 0);
-          const tot = inp + outp + cap;
-          if (tot > 0 && dateKey) {
-            if (!scannedDaily[dateKey]) {
-              scannedDaily[dateKey] = { total: 0, input: 0, output: 0, cache: 0, steps: 0 };
+      const st = fs.statSync(file);
+      const cached = transcriptFileCache.get(file);
+      let fileDaily;
+      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+        fileDaily = cached.daily;
+      } else {
+        fileDaily = {};
+        const content = fs.readFileSync(file, 'utf8');
+        const lines = content.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line) continue;
+          const parsed = parsePlannerStepLine(line);
+          if (parsed && parsed.total > 0 && parsed.createdAt) {
+            const d = new Date(parsed.createdAt);
+            if (!Number.isNaN(d.getTime())) {
+              const dateKey = formatLocalDateKey(d);
+              registerInstallDate(dateKey);
+              if (!fileDaily[dateKey]) {
+                fileDaily[dateKey] = { total: 0, input: 0, output: 0, cache: 0, steps: 0 };
+              }
+              fileDaily[dateKey].total += parsed.total;
+              fileDaily[dateKey].input += parsed.input;
+              fileDaily[dateKey].output += parsed.output;
+              fileDaily[dateKey].cache += parsed.cache;
+              fileDaily[dateKey].steps += 1;
             }
-            scannedDaily[dateKey].total += tot;
-            scannedDaily[dateKey].input += inp;
-            scannedDaily[dateKey].output += outp;
-            scannedDaily[dateKey].cache += cap;
-            scannedDaily[dateKey].steps += 1;
           }
         }
+        transcriptFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, daily: fileDaily });
+      }
+      for (const [dateKey, rec] of Object.entries(fileDaily)) {
+        registerInstallDate(dateKey);
+        if (!scannedDaily[dateKey]) {
+          scannedDaily[dateKey] = { total: 0, input: 0, output: 0, cache: 0, steps: 0 };
+        }
+        scannedDaily[dateKey].total += rec.total;
+        scannedDaily[dateKey].input += rec.input;
+        scannedDaily[dateKey].output += rec.output;
+        scannedDaily[dateKey].cache += rec.cache;
+        scannedDaily[dateKey].steps += rec.steps;
       }
     } catch {}
   }
 
-  // 3. Merge scannedDaily with persistent archive (retaining all historical dates without 12-month cap)
+  // 3. Merge scannedDaily with persistent v2 archive (retaining all historical dates without 12-month cap)
   const mergedDaily = {};
   const allKeys = new Set([...Object.keys(archive.dailyMap || {}), ...Object.keys(scannedDaily)]);
   for (const k of Array.from(allKeys).sort()) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
-    registerDate(k);
+    registerInstallDate(k);
     const oldRec = archive.dailyMap?.[k];
     const newRec = scannedDaily[k];
     if (newRec && oldRec) {
@@ -368,10 +434,17 @@ function collectTokenHistory(options = {}) {
   const todayKey = formatLocalDateKey(now);
   const monthPrefix = todayKey.slice(0, 7);
   const yearPrefix = todayKey.slice(0, 4);
-  if (!earliestDate) earliestDate = todayKey;
+
+  const activeTokenKeys = Object.keys(mergedDaily)
+    .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && (mergedDaily[k]?.total > 0))
+    .sort();
+  const firstTokenDate = activeTokenKeys[0] || null;
+  if (!earliestInstallDate) earliestInstallDate = firstTokenDate || todayKey;
+  const effectiveFirstUseDate = firstTokenDate || earliestInstallDate || todayKey;
 
   let grandTotalTokens = 0, totalInputTokens = 0, totalOutputTokens = 0, totalCacheTokens = 0, totalSteps = 0;
-  let todayTokens = 0, monthTokens = 0, yearTokens = 0;
+  let todayTokens = 0, todayInputTokens = 0, todayOutputTokens = 0, todayCacheTokens = 0, todaySteps = 0;
+  let monthTokens = 0, yearTokens = 0;
 
   for (const [k, v] of Object.entries(mergedDaily)) {
     if (!v) continue;
@@ -380,27 +453,50 @@ function collectTokenHistory(options = {}) {
     totalOutputTokens += v.output || 0;
     totalCacheTokens += v.cache || 0;
     totalSteps += v.steps || 0;
-    if (k === todayKey) todayTokens += v.total || 0;
+    if (k === todayKey) {
+      todayTokens += v.total || 0;
+      todayInputTokens += v.input || 0;
+      todayOutputTokens += v.output || 0;
+      todayCacheTokens += v.cache || 0;
+      todaySteps += v.steps || 0;
+    }
     if (k.startsWith(monthPrefix)) monthTokens += v.total || 0;
     if (k.startsWith(yearPrefix)) yearTokens += v.total || 0;
   }
 
+  const netTokens = totalInputTokens + totalOutputTokens;
+  const cacheRatio = grandTotalTokens > 0 ? Number(((totalCacheTokens / grandTotalTokens) * 100).toFixed(1)) : 0;
+  const todayNetTokens = todayInputTokens + todayOutputTokens;
+  const todayCacheRatio = todayTokens > 0 ? Number(((todayCacheTokens / todayTokens) * 100).toFixed(1)) : 0;
   const totalConversations = Math.max(archive.maxConversations || 0, transcriptFiles.length, pbCount);
+
   const out = {
     updatedAt: `${todayKey} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`,
-    firstUseDate: earliestDate,
+    firstUseDate: effectiveFirstUseDate,
+    firstTokenDate,
+    firstInstallDate: earliestInstallDate,
     summary: {
       grandTotalTokens,
       totalInputTokens,
       totalOutputTokens,
       totalCacheTokens,
+      netTokens,
+      cacheRatio,
       todayTokens,
+      todayInputTokens,
+      todayOutputTokens,
+      todayCacheTokens,
+      todayNetTokens,
+      todayCacheRatio,
+      todaySteps,
       monthTokens,
       yearTokens,
       totalSteps,
       totalConversations,
-      firstUseDate: earliestDate,
-      activeDaysCount: Object.keys(mergedDaily).length
+      firstUseDate: effectiveFirstUseDate,
+      firstTokenDate,
+      firstInstallDate: earliestInstallDate,
+      activeDaysCount: activeTokenKeys.length
     },
     dailyMap: mergedDaily
   };
@@ -408,7 +504,10 @@ function collectTokenHistory(options = {}) {
   try {
     fs.mkdirSync(agDir, { recursive: true });
     fs.writeFileSync(archivePath, JSON.stringify({
-      firstUseDate: earliestDate,
+      schemaVersion: 2,
+      firstUseDate: effectiveFirstUseDate,
+      firstTokenDate,
+      firstInstallDate: earliestInstallDate,
       maxConversations: totalConversations,
       updatedAt: out.updatedAt,
       dailyMap: mergedDaily
@@ -417,7 +516,8 @@ function collectTokenHistory(options = {}) {
 
   cachedTokenHistory = out;
   cachedTokenHistoryAt = Date.now();
+  cachedTokenHistoryHome = home;
   return out;
 }
 
-module.exports = { collect, collectTokenHistory, scanFiles, pythonScan, resolvePython };
+module.exports = { collect, collectTokenHistory, parsePlannerStepLine, scanFiles, pythonScan, resolvePython };
