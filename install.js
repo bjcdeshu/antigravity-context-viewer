@@ -52,8 +52,9 @@ function findAsarPath(customPath) {
   throw new Error('Could not auto-detect Antigravity installation (app.asar). Use --path <path-to-app.asar>.');
 }
 
-async function tryHotInject() {
+async function tryHotInject(options = {}) {
   try {
+    const onlyIfMissing = Boolean(options && options.onlyIfMissing);
     const appData = process.env.APPDATA || (process.platform === 'darwin'
       ? path.join(os.homedir(), 'Library', 'Application Support')
       : path.join(os.homedir(), '.config'));
@@ -78,9 +79,8 @@ async function tryHotInject() {
       ? path.join(stateDir, '.live-session.json')
       : path.join(__dirname, '.live-session.json');
     const liveInfo = fs.existsSync(livePath) ? JSON.parse(fs.readFileSync(livePath, 'utf8')) : null;
-    const bundle = ['meter-core.js', 'meter-renderer.js']
-      .map(f => fs.readFileSync(path.join(__dirname, f), 'utf8'))
-      .join('\n');
+    let bundle = null;
+    let historyData = null;
 
     for (const target of targets) {
       const ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -89,9 +89,9 @@ async function tryHotInject() {
         ws.addEventListener('error', reject, { once: true });
       });
       let seq = 0;
-      const evalExpr = expression => new Promise((resolve, reject) => {
+      const sendCdp = (method, params = {}) => new Promise((resolve, reject) => {
         const id = ++seq;
-        const timer = setTimeout(() => reject(new Error('CDP eval timeout')), 5000);
+        const timer = setTimeout(() => reject(new Error('CDP timeout')), 5000);
         const handler = ev => {
           const d = JSON.parse(ev.data);
           if (d.id === id) {
@@ -101,17 +101,45 @@ async function tryHotInject() {
           }
         };
         ws.addEventListener('message', handler);
-        ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
+        ws.send(JSON.stringify({ id, method, params }));
       });
-      if (liveInfo && liveInfo.origin === new URL(target.url).origin) {
-        await evalExpr('window.__AGContextMeterLive=' + JSON.stringify({ port: liveInfo.port, token: liveInfo.token }));
+      const evalExpr = expression => sendCdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+
+      if (onlyIfMissing) {
+        const probe = await evalExpr('Boolean(window.__AGContextMeter && document.getElementById("ag-context-meter"))');
+        if (probe?.result?.result?.value === true) {
+          ws.close();
+          continue;
+        }
       }
-      try {
-        const { collectTokenHistory } = require('./meter-collector');
-        const historyData = collectTokenHistory({ force: true });
-        await evalExpr('window.__AGContextMeterHistory=' + JSON.stringify(historyData));
-      } catch {}
+
+      if (!bundle) {
+        bundle = ['meter-core.js', 'meter-renderer.js']
+          .map(f => fs.readFileSync(path.join(__dirname, f), 'utf8'))
+          .join('\n');
+        try {
+          const { collectTokenHistory } = require('./meter-collector');
+          historyData = collectTokenHistory({ force: !onlyIfMissing });
+        } catch {}
+      }
+
+      const liveAssign = (liveInfo && liveInfo.origin === new URL(target.url).origin)
+        ? `window.__AGContextMeterLive=${JSON.stringify({ port: liveInfo.port, token: liveInfo.token })};`
+        : '';
+      const historyAssign = historyData
+        ? `window.__AGContextMeterHistory=${JSON.stringify(historyData)};`
+        : '';
+
+      if (liveAssign) await evalExpr(liveAssign);
+      if (historyAssign) await evalExpr(historyAssign);
       await evalExpr(bundle);
+
+      try {
+        const bootScript = `${liveAssign}\n${historyAssign}\nif (!window.__AGContextMeter) {\n  const run = () => {\n${bundle}\n  };\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once: true });\n  else run();\n}`;
+        await sendCdp('Page.enable', {});
+        await sendCdp('Page.addScriptToEvaluateOnNewDocument', { source: bootScript });
+      } catch {}
+
       ws.close();
     }
     return true;

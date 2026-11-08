@@ -101,18 +101,22 @@ async function ensureLiveBridgeIfNeeded() {
     try {
       const info = JSON.parse(fs.readFileSync(liveSessionPath, 'utf8'));
       process.kill(info.pid, 0);
-      alive = await new Promise(resolve => {
-        const req = http.request(`http://127.0.0.1:${info.port}/token-history`, {
-          method: 'OPTIONS',
-          headers: { Origin: info.origin }
-        }, res => {
-          res.resume();
-          resolve(res.statusCode === 204);
+      if (!info.watchdog) {
+        try { process.kill(info.pid); } catch {}
+      } else {
+        alive = await new Promise(resolve => {
+          const req = http.request(`http://127.0.0.1:${info.port}/token-history`, {
+            method: 'OPTIONS',
+            headers: { Origin: info.origin }
+          }, res => {
+            res.resume();
+            resolve(res.statusCode === 204);
+          });
+          req.setTimeout(1000, () => { req.destroy(); resolve(false); });
+          req.on('error', () => resolve(false));
+          req.end();
         });
-        req.setTimeout(1000, () => { req.destroy(); resolve(false); });
-        req.on('error', () => resolve(false));
-        req.end();
-      });
+      }
     } catch {}
   }
   if (!alive) {

@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { connect } = require('./local-api');
 const { collect, collectTokenHistory } = require('./meter-collector');
 const { getStateDir } = require('./asar-engine');
+const { tryHotInject } = require('./install');
 (async () => {
   const api = await connect();
   const secret = crypto.randomBytes(32).toString('hex');
@@ -38,13 +39,21 @@ const { getStateDir } = require('./asar-engine');
     });
   });
   server.listen(0, '127.0.0.1', () => {
-    const info = { port: server.address().port, token: secret, pid: process.pid, origin: api.origin, startedAt: Date.now() };
+    const info = { port: server.address().port, token: secret, pid: process.pid, origin: api.origin, watchdog: true, startedAt: Date.now() };
     fs.writeFileSync(stamp, JSON.stringify(info));
     console.log('Context Meter v2 local read-only bridge ready on loopback port ' + info.port);
   });
+  let injectBusy = false;
+  const watchdog = setInterval(async () => {
+    if (injectBusy) return;
+    injectBusy = true;
+    try { await tryHotInject({ onlyIfMissing: true }); }
+    catch {}
+    finally { injectBusy = false; }
+  }, 2500);
   let misses = 0;
   const check = setInterval(async () => {
     try { const a = await connect(); if (a.origin !== api.origin) throw new Error('App restarted'); misses = 0; }
-    catch { if (++misses >= 3) { clearInterval(check); server.close(); process.exit(0); } }
+    catch { if (++misses >= 3) { clearInterval(watchdog); clearInterval(check); server.close(); process.exit(0); } }
   }, 10000);
 })().catch(e => { console.error(e.message); process.exitCode = 1; });

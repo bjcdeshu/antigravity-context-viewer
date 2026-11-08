@@ -2213,6 +2213,7 @@
           '  padding-right: calc(var(--right-cluster-width, 140px) - 4px) !important;',
           '}',
           wcoWidth > 0 ? [
+            `.agy-layout-vars { --right-cluster-width: ${44 + wcoWidth}px !important; }`,
             '[class*="@container/titlebar"],',
             '[data-aux-pane-focus-scope="true"] > div[data-active-tab-id],',
             'div[role="navigation"][aria-label] > div.shrink-0:first-child {',
