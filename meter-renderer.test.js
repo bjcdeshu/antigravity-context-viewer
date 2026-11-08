@@ -35,12 +35,12 @@ function harness(scanSession = session()) {
     return el;
   };
   const host = element(); host.attachShadow = () => ({ set innerHTML(value) {}, getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); } });
-  const pending = [], scans = [], timers = [];
-  const sandbox = { location: { protocol: 'https:', hostname: '127.0.0.1', pathname: '/c/11111111-1111-1111-1111-111111111111' }, document: { createElement: () => element(), documentElement: { appendChild() {} }, addEventListener() {}, removeEventListener() {}, hidden: false }, window: { __APP_CONFIG__: { csrfToken: 'test' }, contextMeterAPI: { scan: id => new Promise(resolve => scans.push({ id, resolve })) } }, __AGContextMeterCore: core, AbortController, Date, setTimeout: () => 1, clearTimeout() {}, setInterval(callback) { timers.push(callback); return 1; }, clearInterval() {}, fetch(url, options) { return new Promise(resolve => pending.push({ url, options, resolve })); } };
+  const pending = [], scans = [], timers = [], docListeners = new Map();
+  const sandbox = { location: { protocol: 'https:', hostname: '127.0.0.1', pathname: '/c/11111111-1111-1111-1111-111111111111' }, document: { createElement: () => element(), documentElement: { appendChild() {} }, addEventListener(t, fn) { docListeners.set(t, fn); }, removeEventListener(t) { docListeners.delete(t); }, hidden: false }, window: { __APP_CONFIG__: { csrfToken: 'test' }, contextMeterAPI: { scan: id => new Promise(resolve => scans.push({ id, resolve })) } }, __AGContextMeterCore: core, AbortController, Date, setTimeout: () => 1, clearTimeout() {}, setInterval(callback) { timers.push(callback); return 1; }, clearInterval() {}, fetch(url, options) { return new Promise(resolve => pending.push({ url, options, resolve })); } };
   // First createElement call is the host; later calls are safe text-only file rows.
   let first = true; sandbox.document.createElement = () => { if (first) { first = false; return host; } return element(); };
   vm.createContext(sandbox); vm.runInContext(source, sandbox);
-  return { sandbox, host, pending, scans, elements, tick: () => timers[0](), flush: () => new Promise(resolve => setImmediate(resolve)), finishScan(i = 0) { scans[i].resolve({ ok: true, data: { session: scanSession, scannedAt: Date.now(), latest: null } }); } };
+  return { sandbox, host, pending, scans, elements, docListeners, tick: () => timers[0](), flush: () => new Promise(resolve => setImmediate(resolve)), finishScan(i = 0) { scans[i].resolve({ ok: true, data: { session: scanSession, scannedAt: Date.now(), latest: null } }); } };
 }
 function response(chatModel) { return { ok: true, json: async () => ({ generatorMetadata: [{ chatModel }] }) }; }
 test('late old request and old full-scan responses cannot contaminate a newly selected chat', async () => {
@@ -535,6 +535,49 @@ test('v5.1: heatmap top-row anti-clipping padding and popover Chinese translatio
 
   api.dispose();
 });
+
+test('native Overview Panel mutual exclusion and z-index stacking elevation prevent overlap', () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  let overviewOpen = true;
+  let overviewToggleClicks = 0;
+
+  const z0Ancestor = { style: { zIndex: '' } };
+  h.host.closest = sel => (sel === 'div.relative.z-0' ? z0Ancestor : null);
+  h.sandbox.document.querySelector = sel => {
+    if (sel === '.animate-overview-panel' && overviewOpen) {
+      return { getBoundingClientRect: () => ({ width: 320, height: 198 }) };
+    }
+    if (sel === '[data-testid="toggle-overview-panel"]') {
+      return {
+        click() {
+          overviewToggleClicks += 1;
+          overviewOpen = !overviewOpen;
+          // Simulate synthetic outside click triggered by toggleBtn.click()
+          h.docListeners.get('click')?.({ composedPath: () => [] });
+        }
+      };
+    }
+    return null;
+  };
+
+  // Opening context panel dismisses native Overview panel without self-closing and elevates stacking context
+  h.elements.get('badge').click();
+  assert.equal(overviewToggleClicks, 1);
+  assert.equal(overviewOpen, false);
+  assert.equal(h.elements.get('panel').hidden, false);
+  assert.equal(h.host.getAttribute('data-elevated'), 'true');
+  assert.equal(z0Ancestor.style.zIndex, '100');
+
+  // Pointerdown outside (e.g. clicking native Overview button) closes context panel immediately
+  h.docListeners.get('pointerdown')?.({ composedPath: () => [] });
+  assert.equal(h.elements.get('panel').hidden, true);
+  assert.equal(h.host.getAttribute('data-elevated'), null);
+  assert.equal(z0Ancestor.style.zIndex, '');
+
+  api.dispose();
+});
+
 
 
 

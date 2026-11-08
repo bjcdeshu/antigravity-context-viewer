@@ -120,10 +120,13 @@
       color:var(--ag-text-primary);
     }
 
-    /* 融入宿主原生布局容器时参与正常 Flexbox 空间分配 */
+    /* 融入宿主原生布局容器时参与正常 Flexbox 空间分配（z-index:100 高于原生 Overview 浮层 z-30） */
     :host([data-dock="flow"]){
-      position:relative !important;top:auto !important;right:auto !important;left:auto !important;bottom:auto !important;z-index:20;
+      position:relative !important;top:auto !important;right:auto !important;left:auto !important;bottom:auto !important;z-index:100;
       margin-right:4px;
+    }
+    :host([data-dock="flow"][data-elevated="true"]){
+      z-index:2147483000 !important;
     }
 
     /* 窗口非活动状态适度降低顶栏对比度 */
@@ -2432,20 +2435,48 @@
   }
 
   let elevatedStackAncestor = null;
+  let suppressOutsideClose = false;
 
   function syncHostStackingElevation(elevate) {
     try {
       if (elevate) {
+        host.setAttribute('data-elevated', 'true');
         const z0 = host.closest?.('div.relative.z-0');
         if (z0?.style) {
           elevatedStackAncestor = z0;
-          z0.style.zIndex = '40';
+          z0.style.zIndex = '100';
         }
-      } else if (elevatedStackAncestor?.style) {
-        elevatedStackAncestor.style.zIndex = '';
-        elevatedStackAncestor = null;
+      } else {
+        host.removeAttribute('data-elevated');
+        if (elevatedStackAncestor?.style) {
+          elevatedStackAncestor.style.zIndex = '';
+          elevatedStackAncestor = null;
+        }
       }
     } catch {}
+  }
+
+  function dismissNativeOverlappingPanels() {
+    try {
+      if (typeof document.querySelector !== 'function') return;
+      const overviewPanel = document.querySelector('.animate-overview-panel');
+      if (overviewPanel) {
+        const rect = overviewPanel.getBoundingClientRect ? overviewPanel.getBoundingClientRect() : { width: 1, height: 1 };
+        if (rect.width > 0 && rect.height > 0) {
+          const toggleBtn = document.querySelector('[data-testid="toggle-overview-panel"]');
+          if (toggleBtn && typeof toggleBtn.click === 'function') {
+            suppressOutsideClose = true;
+            try {
+              toggleBtn.click();
+            } finally {
+              suppressOutsideClose = false;
+            }
+          }
+        }
+      }
+    } catch {
+      suppressOutsideClose = false;
+    }
   }
 
   function getLeftProjectSidebarRight(vw) {
@@ -2550,6 +2581,7 @@
     bOverflow?.setAttribute('aria-expanded', 'false');
 
     if (target === 'tokens') {
+      dismissNativeOverlappingPanels();
       hideContextTooltip();
       closeColorPicker();
       pContext.hidden = true;
@@ -2562,6 +2594,7 @@
       void syncTokenHistoryFromHost();
       renderActiveHeatView(true);
     } else if (target === 'context') {
+      dismissNativeOverlappingPanels();
       hideContextTooltip();
       closeColorPicker();
       pTokens.hidden = true;
@@ -2607,6 +2640,7 @@
     const willOpen = pOverflow.hidden;
     showPanel('none');
     hideContextTooltip();
+    if (willOpen) dismissNativeOverlappingPanels();
     pOverflow.hidden = !willOpen;
     el('badge-overflow')?.setAttribute('aria-expanded', String(willOpen));
     syncHostStackingElevation(willOpen);
@@ -2743,8 +2777,10 @@
 
   el('refresh').addEventListener('click', () => { if (state.route && !state.scanBusy) void scan(state.generation, state.route, true); });
   const outside = e => {
+    if (suppressOutsideClose) return;
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
-    if (!path.includes(host)) {
+    const target = e?.target;
+    if (!path.includes(host) && !(target && host.contains?.(target))) {
       closeColorPicker();
       toggle(false);
       hideContextTooltip();
@@ -2767,7 +2803,8 @@
       syncHostStackingElevation(false);
     }
   };
-  document.addEventListener('click', outside);
+  document.addEventListener('pointerdown', outside, true);
+  document.addEventListener('click', outside, true);
   document.addEventListener('keydown', escape);
 
   // =========================================================================
@@ -3687,7 +3724,8 @@
         window.removeEventListener?.('mouseup', onPointerUp);
         navigator?.windowControlsOverlay?.removeEventListener?.('geometrychange', onWindowResize);
       } catch {}
-      document.removeEventListener('click', outside);
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('click', outside, true);
       document.removeEventListener('keydown', escape);
       try { document.getElementById('ag-wco-spacer')?.remove?.(); } catch {}
       try { document.getElementById('ag-topbar-host-fix')?.remove?.(); } catch {}
