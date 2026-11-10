@@ -412,7 +412,7 @@ test('v5 Section 3 & 5: timeline starts at actual firstUseDate with zero leading
   assert.equal(h.elements.get('first-use-badge').textContent, '首次使用：2026年10月20日');
 
   const colsBox = h.elements.get('h-grid-cols');
-  assert.equal(colsBox.children.length, 52);
+  assert.ok(colsBox.children.length >= 7 && colsBox.children.length < 52, 'short history adapts column count instead of rendering 40+ empty future columns');
   const firstCell = colsBox.children[0].children[0];
   assert.equal(firstCell.getAttribute('data-date'), '2026-10-20');
 
@@ -427,6 +427,7 @@ test('v5 Section 3 & 5: timeline starts at actual firstUseDate with zero leading
   assert.equal(win2.firstUseDate, '2025-03-15');
   assert.equal(h.elements.get('first-use-badge').textContent, '首次使用：2025年3月15日');
   assert.equal(win2.canPrev, true);
+  assert.equal(colsBox.children.length, 52);
 
   // Page back to earliest history; winStart must never go earlier than 2025-03-15
   h.elements.get('h-page-prev').click();

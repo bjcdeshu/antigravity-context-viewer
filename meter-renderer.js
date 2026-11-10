@@ -600,17 +600,33 @@
     .key-takeaway{font-size:11px;color:var(--ag-text-secondary);padding-top:6px;margin-top:6px;border-top:1px solid var(--ag-border-subtle);line-height:1.4}
     .key-takeaway[data-quiet="true"]{display:none}
 
-    #status{padding:7px 10px;border:0;border-left:2.5px solid var(--tone,#666);border-radius:4px;background:var(--ag-bg-status);color:var(--ag-text-status);font-weight:500;font-size:11.5px}
-    #model{overflow-wrap:anywhere;font-size:11.5px;color:var(--ag-text-muted)}
-    #note,#coverage,#updated{font-size:11px;color:var(--ag-text-muted)}
-    #refresh{border:1px solid var(--ag-btn-border);border-radius:6px;background:var(--ag-btn-bg);color:var(--ag-btn-text);padding:4px 10px;margin-top:8px;transition:background-color .14s ease,border-color .14s ease}
+    #status{padding:6px 9px;margin:0 0 8px;border:0;border-left:2.5px solid var(--tone,#666);border-radius:4px;background:var(--ag-bg-status);color:var(--ag-text-status);font-weight:500;font-size:11px;line-height:1.35}
+    .detail-meta-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+    #model{overflow-wrap:anywhere;font-family:var(--ag-font-mono);font-size:11px;font-weight:600;color:var(--ag-text-secondary);margin:0}
+    .detail-meta-right{display:flex;align-items:center;gap:6px}
+    #updated{font-size:10.5px;color:var(--ag-text-muted);margin:0;font-variant-numeric:tabular-nums}
+    #note,#coverage{font-size:11px;color:var(--ag-text-muted);margin:4px 0}
+    #refresh{border:1px solid var(--ag-btn-border);border-radius:5px;background:var(--ag-btn-bg);color:var(--ag-btn-text);font-size:10.5px;padding:2px 8px;margin:0;transition:background-color .14s ease,border-color .14s ease;cursor:pointer}
     #refresh:hover:not(:disabled){background:var(--ag-btn-hover);border-color:var(--ag-btn-border-hover)}
+    .detail-sec-hdr{display:flex;justify-content:space-between;align-items:baseline;margin:9px 0 5px;padding-top:7px;border-top:1px solid var(--ag-border-subtle)}
+    .detail-sec-hdr h4{margin:0;font-size:11px;font-weight:600;color:var(--ag-text-secondary)}
+    .detail-sec-total{font-family:var(--ag-font-mono);font-size:11px;font-weight:600;color:var(--ag-text-primary);font-variant-numeric:tabular-nums}
+    .detail-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;margin:0}
+    .detail-kv-item{display:flex;justify-content:space-between;align-items:baseline;gap:6px;padding:4px 7px;border-radius:5px;background:var(--ag-bg-subcard);border:1px solid var(--ag-border-subcard);font-size:11px}
+    .detail-kv-item dt{color:var(--ag-text-muted);white-space:nowrap}
+    .detail-kv-item dd{margin:0;text-align:right;font-family:var(--ag-font-mono);font-size:11px;font-weight:500;color:var(--ag-text-primary);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .heat-footer-bar{display:flex;justify-content:space-between;align-items:center;margin-top:9px;font-size:11px;color:var(--ag-text-muted);flex-wrap:wrap;gap:8px}
+    .heat-inline-presets{display:inline-flex;align-items:center;gap:3px;background:var(--ag-bg-subcard);border:1px solid var(--ag-border-subcard);border-radius:999px;padding:1.5px 3px}
+    .heat-mini-preset{border:0;background:transparent;color:var(--ag-text-muted);font-size:10.5px;padding:1.5px 6px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:3.5px;transition:color .12s ease,background-color .12s ease}
+    .heat-mini-preset:hover{color:var(--ag-text-primary)}
+    .heat-mini-preset[data-active="true"]{background:var(--ag-bg-card-hover);color:var(--ag-text-primary);font-weight:600}
+    .heat-mini-dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex-shrink:0}
 
-    #files{max-height:220px;overflow:auto}
-    .file{padding:7px 0;border-top:1px solid var(--ag-border-subtle)}
-    .file-name{overflow-wrap:anywhere;color:var(--ag-text-primary)}
-    .file-detail{color:var(--ag-text-muted);font-size:11px}
-    .file-unknown{color:#e6b865;font-size:11px}
+    #files{max-height:160px;overflow:auto}
+    .file{padding:5px 0;border-top:1px solid var(--ag-border-subtle)}
+    .file-name{overflow-wrap:anywhere;color:var(--ag-text-primary);font-size:11px}
+    .file-detail{color:var(--ag-text-muted);font-size:10.5px}
+    .file-unknown{color:#e6b865;font-size:10.5px}
     :host([data-theme="light"]) .file-unknown{color:#b45309}
     #v{color:var(--ag-text-muted);font-size:10px;font-weight:400;margin-left:6px}
 
@@ -663,13 +679,26 @@
     .heat-tab-btn:hover{color:var(--ag-text-primary)}
     .heat-tab-btn.active{color:var(--ag-text-primary);font-weight:600}
 
-    .heat-scroll-box{overflow-x:auto;overflow-y:hidden;padding:6px 6px 4px 6px}
-    .heat-grid-cols{display:flex;gap:3px}
-    .heat-week-col{display:flex;flex-direction:column;gap:3px}
-    .heat-cell{width:10px;height:10px;border-radius:2px;background:var(--ag-heat-lvl-0);cursor:pointer;transition:transform .12s ease}
-    .heat-cell:hover{transform:scale(1.3);z-index:5;outline:1.5px solid var(--ag-heat-outline)}
-    .heat-cell.is-future{opacity:0.36}
+    .heat-scroll-box{overflow-x:hidden;overflow-y:hidden;padding:6px 6px 4px 6px}
+    .heat-grid-cols{display:grid;width:100%;height:84px;gap:4px;box-sizing:border-box}
+    .heat-week-col{display:grid;gap:4px;min-width:0}
+    .heat-cell{
+      width:100%;height:100%;min-height:8px;border-radius:3px;
+      background:var(--ag-heat-lvl-0);cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      transition:transform .12s ease,filter .12s ease;
+      box-sizing:border-box;user-select:none;overflow:hidden;
+    }
+    .heat-cell:hover{transform:scale(1.08);z-index:5;outline:1.5px solid var(--ag-heat-outline);filter:brightness(1.1)}
+    .heat-cell.is-future{opacity:0.28}
     .heat-cell.is-today{outline:1.5px solid var(--ag-custom-token-accent,var(--ag-token-accent-default));outline-offset:0.5px}
+    .heat-cell-lbl{
+      font-family:var(--ag-font-mono);font-size:9.5px;font-weight:600;
+      color:rgba(255,255,255,0.86);text-shadow:0 1px 2px rgba(0,0,0,0.55);
+      pointer-events:none;line-height:1;letter-spacing:-0.02em;
+    }
+    :host([data-theme="light"]) .heat-cell-lbl{color:#18181b;text-shadow:none}
+    .heat-cell.lvl-0 .heat-cell-lbl{color:var(--ag-text-muted);text-shadow:none;font-weight:500;opacity:0.78}
     .lvl-0{background:var(--ag-heat-lvl-0)}
     .lvl-1{background:var(--ag-heat-lvl-1)}
     .lvl-2{background:var(--ag-heat-lvl-2)}
@@ -679,10 +708,13 @@
     .heat-months{position:relative;height:18px;margin-top:4px;font-size:11px;color:var(--ag-text-muted);overflow:hidden}
     .heat-month-item{position:absolute;white-space:nowrap}
 
-    #h-weekly-box{display:none;height:105px;align-items:flex-end;gap:3px;border-bottom:1px solid var(--ag-border-subtle);padding-bottom:3px}
-    .w-bar-col{flex:1;height:100%;display:flex;align-items:flex-end;cursor:pointer}
-    .w-bar-fill{width:100%;border-radius:2px 2px 0 0;background:var(--ag-heat-lvl-0);min-height:3px;transition:height .22s ease,background-color .14s ease}
+    #h-weekly-box{display:none;height:105px;align-items:flex-end;gap:6px;border-bottom:1px solid var(--ag-border-subtle);padding-bottom:3px}
+    .w-bar-col{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;cursor:pointer;min-width:0}
+    .w-bar-track{width:100%;flex:1;display:flex;align-items:flex-end;justify-content:center}
+    .w-bar-fill{width:100%;max-width:48px;border-radius:3px 3px 0 0;background:var(--ag-heat-lvl-0);min-height:4px;transition:height .22s ease,background-color .14s ease}
+    .w-bar-lbl{font-family:var(--ag-font-mono);font-size:9.5px;color:var(--ag-text-muted);white-space:nowrap;line-height:1}
     .w-bar-col:hover .w-bar-fill{background:var(--ag-custom-token-accent,var(--ag-heat-lvl-4))!important}
+    .w-bar-col:hover .w-bar-lbl{color:var(--ag-text-primary)}
 
     #h-monthly-box{display:none;height:105px;width:100%;box-sizing:border-box;align-items:center;justify-content:center}
     .heat-month-grid{display:grid;width:100%;height:100%;align-content:center;justify-content:center}
@@ -896,8 +928,8 @@
         <div id="speed-takeaway" class="key-takeaway" data-quiet="true">等待首次模型输出产生速度统计…</div>
       </div>
 
-      <!-- 二级交互折叠区 1: 面板背景与指标颜色自定义（就近放置于面板 B 内部） -->
-      <div class="tech-drawer">
+      <!-- 二级交互折叠区 1: 面板背景与指标颜色自定义（精简隐藏，保持默认跟随主题） -->
+      <div class="tech-drawer" style="display:none!important">
         <button id="btn-toggle-colors" class="drawer-trigger" aria-expanded="false" type="button">
           <span class="drawer-trigger-left"><span>外观与配色自定义（默认跟随主题）</span></span>
           <span id="color-drawer-arrow" class="drawer-arrow">▼ 展开设置</span>
@@ -968,23 +1000,52 @@
         </div>
       </div>
 
-      <!-- 二级交互折叠区 2: 底层技术参数与附件审计 -->
+      <!-- 二级交互折叠区 2: 会话构成与诊断明细（紧凑双栏排版） -->
       <div class="tech-drawer">
         <button id="btn-toggle-details" class="drawer-trigger" aria-expanded="false" type="button">
           <span class="drawer-trigger-left">
-            <span>底层技术参数与附件审计</span>
+            <span>会话构成与诊断明细</span>
           </span>
           <span id="drawer-arrow" class="drawer-arrow">▼ 点击展开明细</span>
         </button>
         <div id="drawer-body" class="drawer-body" style="display:none;">
-          <p id="status">正在核对请求和附件…</p><p id="model"></p>
-          <h4>最近一次模型请求</h4>
-          <dl><dt>请求状态</dt><dd id="request-status">—</dd><dt>模型返回输入＋输出</dt><dd id="actual">—</dd><dt>客户端估算（可能漏附件）</dt><dd id="estimate">—</dd><dt>客户端预算字段</dt><dd id="budget">—</dd><dt>该次报错的服务端限制</dt><dd id="service-limit">—</dd><dt>相对客户端预算</dt><dd id="percent">—</dd></dl>
-          <h4>整个会话累计内容 · 本地估算</h4>
-          <dl><dt>可读取文本 token 估算</dt><dd id="session-total">扫描中…</dd><dt>实际读取文字字符数</dt><dd id="characters">—</dd><dt>用户消息</dt><dd id="user">—</dd><dt>模型回复</dt><dd id="assistant">—</dd><dt>可见思考内容</dt><dd id="thinking">—</dd><dt>工具调用与工具输出</dt><dd id="tools">—</dd><dt>历史压缩摘要</dt><dd id="summaries">—</dd><dt>当前系统提示与工具定义</dt><dd id="system">—</dd><dt>上传／输出附件文本</dt><dd id="attachment-total">—</dd><dt>历史步骤完整性</dt><dd id="steps">—</dd></dl>
-          <p id="coverage"></p><h4>附件逐项检查</h4><div id="files"></div><button id="refresh" type="button">重新扫描整段会话与附件</button>
-          <p id="note">会话累计包括可读取的全部归档历史；已压缩内容仍计入累计。它不等于当前实际发送给模型的上下文，不能用累计值除以 1M 判断剩余空间。附件原文与工具读出的文本可能在历史中分别出现，各按一次出现计入。尚未发送的草稿与待上传附件不在归档内，暂未计入；新上传可能使下一次请求明显增长。<br><br>本地 token 区间是文本启发式估算，不是 Gemini 分词结果，也不是严格上下界。图像、音视频、加密文件、不可访问文件和未解析部分会明确列为未知。未知内容不按零处理；只有服务端返回的用量才标为实际统计。此功能不向外部发送文件，不执行宏或公式。</p>
-          <p id="updated"></p>
+          <div class="detail-meta-bar">
+            <p id="model"></p>
+            <div class="detail-meta-right">
+              <p id="updated"></p>
+              <button id="refresh" type="button">↻ 重新扫描</button>
+            </div>
+          </div>
+          <p id="status">正在核对请求和附件…</p>
+          <dl class="detail-kv-grid">
+            <div class="detail-kv-item"><dt>请求状态</dt><dd id="request-status">—</dd></div>
+            <div class="detail-kv-item"><dt>服务端实际</dt><dd id="actual">—</dd></div>
+            <div class="detail-kv-item"><dt>客户端估算</dt><dd id="estimate">—</dd></div>
+            <div class="detail-kv-item"><dt>归档步数</dt><dd id="steps">—</dd></div>
+          </dl>
+          <dl class="sr-only"><dt>客户端预算字段</dt><dd id="budget">—</dd><dt>该次报错的服务端限制</dt><dd id="service-limit">—</dd><dt>相对客户端预算</dt><dd id="percent">—</dd></dl>
+
+          <div class="detail-sec-hdr">
+            <h4>会话归档构成（本地估算）</h4>
+            <span id="session-total" class="detail-sec-total">扫描中…</span>
+          </div>
+          <dl class="detail-kv-grid">
+            <div class="detail-kv-item"><dt>工具调用</dt><dd id="tools">—</dd></div>
+            <div class="detail-kv-item"><dt>系统与定义</dt><dd id="system">—</dd></div>
+            <div class="detail-kv-item"><dt>用户消息</dt><dd id="user">—</dd></div>
+            <div class="detail-kv-item"><dt>模型回复</dt><dd id="assistant">—</dd></div>
+            <div class="detail-kv-item"><dt>思考内容</dt><dd id="thinking">—</dd></div>
+            <div class="detail-kv-item"><dt>附件文本</dt><dd id="attachment-total">—</dd></div>
+            <div class="detail-kv-item"><dt>压缩摘要</dt><dd id="summaries">—</dd></div>
+            <div class="detail-kv-item"><dt>读取字符</dt><dd id="characters">—</dd></div>
+          </dl>
+
+          <div class="detail-sec-hdr">
+            <h4>附件审计</h4>
+          </div>
+          <p id="coverage"></p>
+          <div id="files"></div>
+          <p id="note" class="sr-only">会话累计包括可读取的全部归档历史；已压缩内容仍计入累计。</p>
         </div>
       </div>
     </div>
@@ -1076,24 +1137,30 @@
             <span class="heat-sum-val" id="h-sum-cost" style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">--</span>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11px;color:var(--ag-text-muted);flex-wrap:wrap;gap:6px">
-          <span>点击或悬浮格子查看当日详细 Token 构成</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            <div id="heat-legend-scale" style="display:flex;align-items:center;gap:4px;cursor:pointer" title="点击任一色块单独修改该档位颜色，或点击文字展开设置">
+        <div class="heat-footer-bar">
+          <span>悬浮或点击查看明细</span>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div class="heat-inline-presets" id="heat-inline-presets" aria-label="热力图配色主题">
+              <button class="heat-mini-preset" type="button" data-heat-preset="terracotta" data-active="true" title="暖陶默认"><i class="heat-mini-dot" style="background:#d97757"></i><span>暖陶</span></button>
+              <button class="heat-mini-preset" type="button" data-heat-preset="mono" data-active="false" title="原生石墨"><i class="heat-mini-dot" style="background:#9494a1"></i><span>石墨</span></button>
+              <button class="heat-mini-preset" type="button" data-heat-preset="green" data-active="false" title="经典森绿"><i class="heat-mini-dot" style="background:#22c55e"></i><span>森绿</span></button>
+              <button class="heat-mini-preset" type="button" data-heat-preset="blue" data-active="false" title="静谧靛蓝"><i class="heat-mini-dot" style="background:#3b82f6"></i><span>靛蓝</span></button>
+            </div>
+            <div id="heat-legend-scale" style="display:flex;align-items:center;gap:4px">
               <span>少</span>
-              <button id="heat-leg-0" class="heat-leg-swatch" type="button" data-color-slot="heatLvl0" data-color-label="色阶第 1 档（少/无用量）" title="第 1 档（少/无用量）：点击单独修改此格颜色"></button>
-              <button id="heat-leg-1" class="heat-leg-swatch" type="button" data-color-slot="heatLvl1" data-color-label="色阶第 2 档（低用量）" title="第 2 档（低用量）：点击单独修改此格颜色"></button>
-              <button id="heat-leg-2" class="heat-leg-swatch" type="button" data-color-slot="heatLvl2" data-color-label="色阶第 3 档（中等用量）" title="第 3 档（中等用量）：点击单独修改此格颜色"></button>
-              <button id="heat-leg-3" class="heat-leg-swatch" type="button" data-color-slot="heatLvl3" data-color-label="色阶第 4 档（高用量）" title="第 4 档（高用量）：点击单独修改此格颜色"></button>
-              <button id="heat-leg-4" class="heat-leg-swatch" type="button" data-color-slot="heatLvl4" data-color-label="色阶第 5 档（多/峰值用量）" title="第 5 档（多/峰值用量）：点击单独修改此格颜色"></button>
+              <button id="heat-leg-0" class="heat-leg-swatch" type="button" data-color-slot="heatLvl0" data-color-label="色阶第 1 档（少/无用量）" title="第 1 档（少/无用量）"></button>
+              <button id="heat-leg-1" class="heat-leg-swatch" type="button" data-color-slot="heatLvl1" data-color-label="色阶第 2 档（低用量）" title="第 2 档（低用量）"></button>
+              <button id="heat-leg-2" class="heat-leg-swatch" type="button" data-color-slot="heatLvl2" data-color-label="色阶第 3 档（中等用量）" title="第 3 档（中等用量）"></button>
+              <button id="heat-leg-3" class="heat-leg-swatch" type="button" data-color-slot="heatLvl3" data-color-label="色阶第 4 档（高用量）" title="第 4 档（高用量）"></button>
+              <button id="heat-leg-4" class="heat-leg-swatch" type="button" data-color-slot="heatLvl4" data-color-label="色阶第 5 档（多/峰值用量）" title="第 5 档（多/峰值用量）"></button>
               <span>多</span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 二级交互折叠区（就近放置于面板 A 内部）：面板背景色 + 热力图 5 档色阶预设、5 档逐格独立自定义与两端插值自定义 -->
-      <div class="tech-drawer" style="margin-top:2px">
+      <!-- 二级交互折叠区（已收归顶栏/内联预设，隐藏旧版繁琐调色抽屉） -->
+      <div class="tech-drawer" style="display:none!important">
         <button id="btn-toggle-token-colors" class="drawer-trigger" aria-expanded="false" type="button">
           <span class="drawer-trigger-left"><span>热力图色阶与面板外观（默认跟随主题）</span></span>
           <span id="token-color-drawer-arrow" class="drawer-arrow">▼ 展开设置</span>
@@ -1657,12 +1724,14 @@
       customColors.heatLvl0 || customColors.heatLvl1 || customColors.heatLvl2 || customColors.heatLvl3 || customColors.heatLvl4
     );
     try {
-      const group = el('heat-preset-group');
-      if (group?.querySelectorAll) {
-        const btns = group.querySelectorAll('[data-heat-preset]');
-        for (const btn of btns) {
-          const pName = btn.getAttribute('data-heat-preset');
-          btn.setAttribute('data-active', String(!hasCustomHeat && pName === heatPreset));
+      for (const groupId of ['heat-preset-group', 'heat-inline-presets']) {
+        const group = el(groupId);
+        if (group?.querySelectorAll) {
+          const btns = group.querySelectorAll('[data-heat-preset]');
+          for (const btn of btns) {
+            const pName = btn.getAttribute('data-heat-preset');
+            btn.setAttribute('data-active', String(!hasCustomHeat && pName === heatPreset));
+          }
         }
       }
     } catch {}
@@ -2039,13 +2108,15 @@
   el('reset-all-colors-tokens')?.addEventListener('click', () => { resetCustomColors(); closeColorPicker(); });
 
   try {
-    const presetGroup = el('heat-preset-group');
-    if (presetGroup?.querySelectorAll) {
-      for (const btn of presetGroup.querySelectorAll('[data-heat-preset]')) {
-        btn.addEventListener('click', () => {
-          const p = btn.getAttribute('data-heat-preset');
-          if (p) setHeatPreset(p);
-        });
+    for (const groupId of ['heat-preset-group', 'heat-inline-presets']) {
+      const presetGroup = el(groupId);
+      if (presetGroup?.querySelectorAll) {
+        for (const btn of presetGroup.querySelectorAll('[data-heat-preset]')) {
+          btn.addEventListener('click', () => {
+            const p = btn.getAttribute('data-heat-preset');
+            if (p) setHeatPreset(p);
+          });
+        }
       }
     }
   } catch {}
@@ -3128,28 +3199,32 @@
     return formatLocalYmd(new Date());
   }
 
-  // 计算从「实际首次使用日」起算的 12 个月（52 周 = 364 天）展示窗口，绝不展示首次使用日之前的日期
+  // 计算从「实际首次使用日」起算的动态时间轴窗口：
+  // 未满一年时窗口为 [firstUseDate, today]（既无前置空白，也不向未来预支 11 个月空白）；满一年后为滚动 52 周窗口
   function computeTimelineWindow() {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const firstStr = getFirstUseDateStr();
     const firstDate = parseLocalYmd(firstStr) || today;
-    const totalDays = 52 * 7; // 364 天（12 个月 / 52 周）
-    const elapsedDays = Math.max(0, Math.floor((today.getTime() - firstDate.getTime()) / 86400000)) + 1;
+    const maxYearDays = 52 * 7; // 364 天（12 个月 / 52 周上限）
+    const elapsedDays = Math.max(1, Math.floor((today.getTime() - firstDate.getTime()) / 86400000) + 1);
 
     let winStart;
     let winEnd;
+    let totalDays;
     let canPrev = false;
     let canNext = false;
 
-    if (elapsedDays <= totalDays) {
-      // 使用未满一年：起点固定为实际首次使用日，向后铺满 12 个月（前置空白为 0）
+    if (elapsedDays <= maxYearDays) {
+      // 使用未满一年：起点为实际首次使用日，终点为今天（不生成次年整片未来空白）
       heatPageOffset = 0;
       winStart = new Date(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate());
-      winEnd = addDays(winStart, totalDays - 1);
+      winEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      totalDays = elapsedDays;
     } else {
       // 使用满一年后：默认窗口滚动为「以今天结尾的最近 12 个月」，且起点永不早于首次使用日；支持 ‹ / › 翻页回看更早归档
-      const latestStart = addDays(today, -(totalDays - 1));
+      totalDays = maxYearDays;
+      const latestStart = addDays(today, -(maxYearDays - 1));
       const stepDays = 26 * 7; // 每次翻页半年度（26 周）
       let candidateStart = addDays(latestStart, heatPageOffset * stepDays);
       if (candidateStart.getTime() <= firstDate.getTime()) {
@@ -3158,7 +3233,7 @@
         if (heatPageOffset < maxBackSteps) heatPageOffset = maxBackSteps;
       }
       winStart = candidateStart;
-      winEnd = addDays(winStart, totalDays - 1);
+      winEnd = addDays(winStart, maxYearDays - 1);
       canPrev = winStart.getTime() > firstDate.getTime();
       canNext = heatPageOffset < 0;
     }
@@ -3418,8 +3493,24 @@
     if (!colsBox || !monthsBox) return;
     const win = computeTimelineWindow();
     const todayKey = formatLocalYmd(win.today);
+
+    // 自适应列排布：根据实际使用天数动态确定每列行数（3~7 行）与列数，铺满容器宽度且不预支未来月份空白
+    const spanDays = Math.max(1, win.totalDays);
+    const minDisplayDays = Math.max(21, spanDays);
+    const rowsPerCol = minDisplayDays <= 36
+      ? 3
+      : (minDisplayDays <= 68 ? 4 : (minDisplayDays <= 120 ? 5 : (minDisplayDays <= 180 ? 6 : 7)));
+    const numCols = Math.max(1, Math.ceil(minDisplayDays / rowsPerCol));
+    const gridTotalCells = numCols * rowsPerCol;
+    const gapPx = numCols <= 20 ? 4 : 3;
+
+    const activeDateKeys = [];
+    for (let i = 0; i < spanDays; i++) {
+      activeDateKeys.push(formatLocalYmd(addDays(win.winStart, i)));
+    }
+
     const list = [];
-    for (let i = 0; i < win.totalDays; i++) {
+    for (let i = 0; i < gridTotalCells; i++) {
       const d = addDays(win.winStart, i);
       const key = formatLocalYmd(d);
       const isFuture = d.getTime() > win.today.getTime();
@@ -3427,39 +3518,58 @@
       list.push({ date: d, key, tokens: rec ? rec.total : 0, rec, isFuture, isToday: key === todayKey });
     }
 
-    const sig = `${win.firstStr}:${formatLocalYmd(win.winStart)}:${Object.keys(ANTIGRAVITY_TOKEN_DATA.dailyMap).length}`;
+    const sig = `${win.firstStr}:${formatLocalYmd(win.winStart)}:${spanDays}:${Object.keys(ANTIGRAVITY_TOKEN_DATA.dailyMap).length}`;
     if (!forceRebuild && colsBox.children.length > 0 && colsBox.getAttribute('data-sig') === sig) {
-      updateSummaryBar(list.map(x => x.key));
+      updateSummaryBar(activeDateKeys);
       return;
     }
 
     colsBox.replaceChildren();
     monthsBox.replaceChildren();
     colsBox.setAttribute('data-sig', sig);
+    colsBox.style.gridTemplateColumns = `repeat(${numCols}, minmax(0, 1fr))`;
+    colsBox.style.gap = `${gapPx}px`;
 
     const monthMarkers = [];
     let lastM = -1;
     let lastCol = -10;
+    const minColStep = Math.max(1, Math.floor(numCols / 10));
 
-    for (let c = 0; c < 52; c++) {
+    for (let c = 0; c < numCols; c++) {
       const col = document.createElement('div');
       col.className = 'heat-week-col';
-      const slice = list.slice(c * 7, (c + 1) * 7);
-      const mNum = slice[0].date.getMonth() + 1;
+      col.style.gridTemplateRows = `repeat(${rowsPerCol}, minmax(0, 1fr))`;
+      col.style.gap = `${gapPx}px`;
+      const slice = list.slice(c * rowsPerCol, (c + 1) * rowsPerCol);
+      const firstInSlice = slice.find(it => it.date.getDate() === 1) || slice[0];
+      const mNum = firstInSlice.date.getMonth() + 1;
       if (mNum !== lastM) {
-        if (c - lastCol >= 3 && 52 - c >= 2) {
+        if (c === 0 || (c - lastCol >= minColStep && numCols - c >= 1)) {
           monthMarkers.push({ month: mNum, colIdx: c });
           lastCol = c;
         }
         lastM = mNum;
       }
 
-      slice.forEach(item => {
+      slice.forEach((item, rIdx) => {
         const cell = document.createElement('div');
         const lvl = getLvl(item.tokens);
         cell.className = `heat-cell lvl-${lvl}${item.isFuture ? ' is-future' : ''}${item.isToday ? ' is-today' : ''}`;
         cell.setAttribute('data-date', item.key);
         cell.setAttribute('data-tokens', String(item.tokens));
+
+        if (numCols <= 22) {
+          const lblSpan = document.createElement('span');
+          lblSpan.className = 'heat-cell-lbl';
+          const m = item.date.getMonth() + 1;
+          const day = item.date.getDate();
+          if (numCols <= 14) {
+            lblSpan.textContent = `${m}/${String(day).padStart(2, '0')}`;
+          } else {
+            lblSpan.textContent = (day === 1 || (c === 0 && rIdx === 0)) ? `${m}/${day}` : String(day);
+          }
+          cell.appendChild(lblSpan);
+        }
 
         const showPop = () => {
           const d = item.date;
@@ -3495,12 +3605,13 @@
     monthMarkers.forEach(mm => {
       const lbl = document.createElement('span');
       lbl.className = 'heat-month-item';
-      lbl.style.left = `${mm.colIdx * 13}px`;
+      const pctLeft = numCols > 0 ? (mm.colIdx / numCols) * 100 : 0;
+      lbl.style.left = `${pctLeft.toFixed(2)}%`;
       lbl.textContent = `${mm.month}月`;
       monthsBox.appendChild(lbl);
     });
 
-    updateSummaryBar(list.map(x => x.key));
+    updateSummaryBar(activeDateKeys);
   }
 
   function renderHeatmapWeekly() {
@@ -3511,7 +3622,7 @@
     const scale = getEffectiveHeatmapScale();
     const [cEmpty, c1, c2, c3, c4] = scale;
     const win = computeTimelineWindow();
-    const totalWeeks = 52;
+    const totalWeeks = Math.max(4, Math.min(52, Math.ceil(win.totalDays / 7)));
     const weeksData = [];
     const allWinDates = [];
     let max = 1;
@@ -3524,7 +3635,7 @@
         const d = addDays(win.winStart, c * 7 + r);
         const k = formatLocalYmd(d);
         weekDates.push(k);
-        allWinDates.push(k);
+        if (d.getTime() <= win.today.getTime()) allWinDates.push(k);
         if (!sDate) sDate = d;
         eDate = d;
         const rec = ANTIGRAVITY_TOKEN_DATA.dailyMap[k];
@@ -3538,13 +3649,22 @@
       const col = document.createElement('div');
       col.className = 'w-bar-col';
       col.setAttribute('data-week-start', w.startKey);
+      const track = document.createElement('div');
+      track.className = 'w-bar-track';
       const fill = document.createElement('div');
       fill.className = 'w-bar-fill';
-      const pct = Math.max(3, (w.sum / max) * 100);
+      const pct = Math.max(4, (w.sum / max) * 100);
       fill.style.height = `${pct}%`;
       const lvl = typeof getLvlForRange === 'function' ? getLvlForRange(w.sum, 'week', max) : (w.sum === 0 ? 0 : (w.sum < 1e7 ? 1 : (w.sum < 5e7 ? 2 : (w.sum < 1.5e8 ? 3 : 4))));
       fill.style.backgroundColor = w.sum === 0 ? cEmpty : (scale[lvl] || c4);
-      col.appendChild(fill);
+      track.appendChild(fill);
+      col.appendChild(track);
+      if (totalWeeks <= 14) {
+        const lbl = document.createElement('span');
+        lbl.className = 'w-bar-lbl';
+        lbl.textContent = `${w.sDate.getMonth() + 1}.${String(w.sDate.getDate()).padStart(2, '0')}`;
+        col.appendChild(lbl);
+      }
 
       const showPop = () => {
         const agg = typeof calculateIntervalCost === 'function'
