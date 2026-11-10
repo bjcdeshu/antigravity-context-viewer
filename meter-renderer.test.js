@@ -694,5 +694,86 @@ test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Def
   h.sandbox.__AGContextMeter.dispose();
 });
 
+test('v2.30.0: 5 heatmap views (daily, weekly, monthly calendar grid, yearly 12-month bubble chart, cumulative) and bottom interval summary bar', () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = String(now.getMonth() + 1).padStart(2, '0');
+  const d1 = `${curY}-${curM}-01`;
+  const d2 = `${curY}-${curM}-02`;
+
+  api.setTokenHistoryForTest({
+    firstTokenDate: `${curY}-01-01`,
+    dailyMap: {
+      [d1]: { total: 4000000, input: 800000, output: 200000, cache: 3000000, steps: 20 },
+      [d2]: { total: 6000000, input: 1200000, output: 300000, cache: 4500000, steps: 30 }
+    }
+  });
+
+  h.elements.get('badge-tokens').click();
+  assert.equal(api.getActiveHeatView(), 'daily');
+  assert.equal(h.elements.get('h-sum-tokens').textContent, '10M Tokens');
+  assert.match(h.elements.get('h-sum-net').textContent, /净 2\.5M · 缓存 75%/);
+  assert.match(h.elements.get('h-sum-active-avg').textContent, /5M\/天 \(2天\)/);
+  assert.match(h.elements.get('h-sum-cost').textContent, /^≈\s*\$/);
+
+  // Switch to Monthly Calendar Grid view
+  h.elements.get('h-tab-monthly').click();
+  assert.equal(api.getActiveHeatView(), 'monthly');
+  assert.equal(h.elements.get('h-monthly-box').style.display, 'flex');
+  assert.equal(h.elements.get('h-win-range').textContent, `${curY}年${now.getMonth() + 1}月`);
+  assert.ok(h.elements.get('h-monthly-box').children[0].children.length >= 28);
+  assert.equal(h.elements.get('h-sum-tokens').textContent, '10M Tokens');
+
+  // Switch to Yearly 12-month Proportional Bubble view
+  h.elements.get('h-tab-yearly').click();
+  assert.equal(api.getActiveHeatView(), 'yearly');
+  assert.equal(h.elements.get('h-yearly-box').style.display, 'flex');
+  assert.equal(h.elements.get('h-win-range').textContent, `${curY}年度 (1月 – 12月)`);
+  assert.equal(h.elements.get('h-yearly-box').children[0].children.length, 12);
+  assert.equal(h.elements.get('h-sum-tokens').textContent, '10M Tokens');
+
+  // Switch back to Daily view and verify ensureAlive()
+  h.elements.get('h-tab-daily').click();
+  assert.equal(api.getActiveHeatView(), 'daily');
+  assert.equal(api.ensureAlive(), true);
+
+  api.dispose();
+  assert.equal(api.ensureAlive(), false);
+});
+
+test('v2.30.0: fine-grained error classification preserves previous valid context on quota/rate/network errors', async () => {
+  const h = harness();
+  h.finishScan();
+
+  // Step 1: Valid response with 85K / 200K context
+  h.pending[0].resolve(response({
+    usage: { inputTokens: 84000, outputTokens: 1000 },
+    chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 200000 } }
+  }));
+  await h.flush();
+  assert.equal(h.elements.get('context-amount').textContent, '85K (43%)');
+
+  // Step 2: Subsequent poll encounters a quota exhaustion error (non-overflow)
+  h.sandbox.Date.now = () => Number.MAX_SAFE_INTEGER;
+  h.tick();
+  h.pending[1].resolve(response({
+    retryInfos: [{ error: 'RESOURCE_EXHAUSTED: MODEL_CAPACITY_EXHAUSTED. Quota reset after 1h30m' }]
+  }));
+  await h.flush();
+
+  // Context token count is preserved alongside the fine-grained short badge
+  assert.equal(h.elements.get('context-amount').textContent, '85K (额度耗尽)');
+  assert.equal(h.elements.get('amount').textContent, '额度耗尽');
+  assert.equal(h.elements.get('key-badge').textContent, '额度耗尽');
+  assert.equal(h.elements.get('key-used').textContent, '85K (42.5%)');
+  assert.match(h.elements.get('key-takeaway').textContent, /1 小时 30 分钟/);
+
+  h.sandbox.__AGContextMeter.dispose();
+});
+
+
 
 

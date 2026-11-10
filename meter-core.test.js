@@ -236,4 +236,56 @@ test('collectTokenHistory separates firstTokenDate from older .pb firstInstallDa
   }
 });
 
+test('classifyRequestError distinguishes context deadline exceeded from context overflow and preserves previousValidContext on non-overflow errors', () => {
+  const { classifyRequestError, calculateIntervalCost } = require('./meter-core');
+
+  // 1) Go's "context deadline exceeded" is a network timeout, NOT context_overflow
+  const deadlineErr = classifyRequestError('Post "https://daily-cloudcode-pa.googleapis.com/...": context deadline exceeded');
+  assert.equal(deadlineErr.kind, 'network_error');
+  assert.equal(deadlineErr.shortBadge, '网络故障');
+
+  // 2) Quota exhausted with reset timer
+  const quotaErr = classifyRequestError('RESOURCE_EXHAUSTED: MODEL_CAPACITY_EXHAUSTED. Quota reset after 2h15m30s');
+  assert.equal(quotaErr.kind, 'quota_exhausted');
+  assert.equal(quotaErr.shortBadge, '额度耗尽');
+  assert.equal(quotaErr.resetDurationZh, '2 小时 15 分钟');
+
+  // 3) summarize with previousValidContext retains context usage on non-overflow error, clears on overflow
+  const prev = summarize(entry({ inputTokens: 80000, outputTokens: 2000 }, { maxContextTokens: 200000 }));
+  assert.equal(prev.actual, 82000);
+
+  const afterQuota = summarize({
+    chatModel: {
+      retryInfos: [{ error: 'RESOURCE_EXHAUSTED: Quota exhausted, reset after 1h20m' }]
+    }
+  }, { previousValidContext: prev });
+  assert.equal(afterQuota.exceeded, false);
+  assert.equal(afterQuota.status, 'quota_exhausted');
+  assert.equal(afterQuota.actual, 82000);
+  assert.equal(afterQuota.budget, 200000);
+  assert.equal(afterQuota.errorClassification.shortBadge, '额度耗尽');
+
+  const afterOverflow = summarize({
+    chatModel: {
+      retryInfos: [{ error: exceeded }]
+    }
+  }, { previousValidContext: prev });
+  assert.equal(afterOverflow.exceeded, true);
+  assert.equal(afterOverflow.actual, null);
+  assert.equal(afterOverflow.percent, null);
+
+  // 4) Interval cost aggregation
+  const interval = calculateIntervalCost({
+    '2026-11-01': { total: 1000000, input: 200000, output: 50000, cache: 750000, steps: 10 },
+    '2026-11-02': { total: 2000000, input: 400000, output: 100000, cache: 1500000, steps: 20 }
+  }, ['2026-11-01', '2026-11-02', '2026-11-03']);
+  assert.equal(interval.totalTokens, 3000000);
+  assert.equal(interval.netTokens, 750000);
+  assert.equal(interval.cacheRatio, 75);
+  assert.equal(interval.activeDays, 2);
+  assert.equal(interval.activeDailyAverageTokens, 1500000);
+  assert.ok(interval.totalCostUSD > 0);
+});
+
+
 

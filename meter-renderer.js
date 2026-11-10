@@ -2,7 +2,12 @@
   'use strict';
   if (location.protocol !== 'https:' || location.hostname !== '127.0.0.1') return;
   globalThis.__AGContextMeter?.dispose();
-  const { summarize } = globalThis.__AGContextMeterCore;
+  const {
+    summarize,
+    getLvlForRange,
+    getDailyReferenceCost,
+    calculateIntervalCost
+  } = (globalThis.__AGContextMeterCore || {});
   const host = document.createElement('div');
   host.id = 'ag-context-meter';
   host.setAttribute('data-layout', 'wide');
@@ -636,8 +641,25 @@
     }
     .heat-nav-btn:hover:not(:disabled){background:var(--ag-btn-hover);color:var(--ag-text-primary)}
     .heat-nav-btn:disabled{opacity:0.35;cursor:default}
-    .heat-tabs{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--ag-text-muted)}
-    .heat-tab-btn{background:none;border:0;color:var(--ag-text-muted);cursor:pointer;padding:2px 0;transition:color .14s ease}
+    .heat-tabs{
+      position:relative;display:inline-flex;align-items:center;
+      background:var(--ag-bg-subcard);border:1px solid var(--ag-border-subcard);
+      border-radius:9999px;padding:2px;gap:2px;user-select:none;
+    }
+    .heat-tab-thumb{
+      position:absolute;top:2px;bottom:2px;left:0;width:0;
+      border-radius:9999px;
+      background:var(--ag-tab-thumb-bg, var(--ag-custom-token-accent, var(--ag-token-accent-default, #d97757)));
+      opacity:0.22;pointer-events:none;
+      transition:transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), width 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      will-change:transform, width;
+    }
+    .heat-tab-btn{
+      position:relative;z-index:1;border:0;background:transparent;
+      color:var(--ag-text-muted);font-size:11px;font-weight:500;
+      padding:3px 9px;border-radius:9999px;cursor:pointer;
+      transition:color .14s ease;outline:none;white-space:nowrap;
+    }
     .heat-tab-btn:hover{color:var(--ag-text-primary)}
     .heat-tab-btn.active{color:var(--ag-text-primary);font-weight:600}
 
@@ -662,8 +684,30 @@
     .w-bar-fill{width:100%;border-radius:2px 2px 0 0;background:var(--ag-heat-lvl-0);min-height:3px;transition:height .22s ease,background-color .14s ease}
     .w-bar-col:hover .w-bar-fill{background:var(--ag-custom-token-accent,var(--ag-heat-lvl-4))!important}
 
+    #h-monthly-box{display:none;height:105px;width:100%;box-sizing:border-box;align-items:center;justify-content:center}
+    .heat-month-grid{display:grid;width:100%;height:100%;align-content:center;justify-content:center}
+    .heat-month-cell{display:flex;align-items:center;justify-content:center;border-radius:3px;cursor:pointer;transition:transform .12s ease}
+    .heat-month-cell:hover{transform:scale(1.16);z-index:5;outline:1.5px solid var(--ag-heat-outline,#fff)}
+    .heat-month-cell-num{font-family:var(--ag-font-mono);font-size:9.5px;font-weight:600;color:rgba(255,255,255,0.88);text-shadow:0 1px 2px rgba(0,0,0,0.6);pointer-events:none}
+    :host([data-theme="light"]) .heat-month-cell-num{color:#18181b;text-shadow:none}
+
+    #h-yearly-box{display:none;height:105px;width:100%;box-sizing:border-box;align-items:center;justify-content:center}
+    .heat-yearly-svg{width:100%;height:105px;display:block;overflow:visible}
+    @keyframes bubblePopIn{0%{transform:scale(0.65);opacity:0}100%{transform:scale(1);opacity:1}}
+    .heat-yearly-bubble-group{transform-origin:center center;animation:bubblePopIn 0.2s cubic-bezier(0.16,1,0.3,1) both;cursor:pointer}
+    .heat-yearly-bubble-group:hover circle.bubble-main{filter:brightness(1.18);stroke:var(--ag-text-primary);stroke-width:1.5px}
+
     #h-cum-box{display:none;height:105px;position:relative}
     canvas#h-cum-canvas{width:100%;height:105px;display:block}
+
+    .heat-summary-bar{
+      display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+      margin-top:8px;padding:6px 10px;background:var(--ag-bg-subcard);border-radius:6px;
+      border:1px solid var(--ag-border-subcard);font-size:11px;
+    }
+    .heat-sum-item{display:inline-flex;align-items:center;gap:4px}
+    .heat-sum-label{color:var(--ag-text-muted);font-size:10.5px}
+    .heat-sum-val{font-family:var(--ag-font-mono);color:var(--ag-text-primary);font-weight:600;font-variant-numeric:tabular-nums}
 
     .heat-preset-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin:6px 0 8px}
     .heat-preset-group{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
@@ -794,7 +838,7 @@
   <section id="panel" class="ag-panel" hidden aria-label="会话与上下文详情">
     <div class="panel-header-bar">
       <div class="panel-title">
-        <h3>当前会话上下文<span id="v">v2.7</span></h3>
+        <h3>当前会话上下文<span id="v">v2.8</span></h3>
       </div>
       <div class="panel-header-actions">
         <button id="theme-toggle" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">自动</button>
@@ -993,20 +1037,43 @@
               <button id="h-page-next" class="heat-nav-btn" type="button" title="查看更新的 12 个月窗口" disabled>›</button>
             </div>
           </div>
-          <div class="heat-tabs">
+          <div class="heat-tabs" id="h-tabs-wrap">
+            <div class="heat-tab-thumb" id="h-tab-thumb"></div>
             <button class="heat-tab-btn active" id="h-tab-daily" type="button">每天</button>
             <button class="heat-tab-btn" id="h-tab-weekly" type="button">每周</button>
+            <button class="heat-tab-btn" id="h-tab-monthly" type="button">每月</button>
+            <button class="heat-tab-btn" id="h-tab-yearly" type="button">今年</button>
             <button class="heat-tab-btn" id="h-tab-cum" type="button">累计总量</button>
           </div>
         </div>
-        <div class="heat-scroll-box">
+        <div class="heat-scroll-box" id="h-scroll-box">
           <div id="h-daily-box">
             <div class="heat-grid-cols" id="h-grid-cols"></div>
             <div class="heat-months" id="h-months"></div>
           </div>
           <div id="h-weekly-box"></div>
+          <div id="h-monthly-box"></div>
+          <div id="h-yearly-box"></div>
           <div id="h-cum-box">
             <canvas id="h-cum-canvas"></canvas>
+          </div>
+        </div>
+        <div class="heat-summary-bar" id="h-summary-bar">
+          <div class="heat-sum-item">
+            <span class="heat-sum-label">区间合计</span>
+            <span class="heat-sum-val" id="h-sum-tokens">--</span>
+          </div>
+          <div class="heat-sum-item">
+            <span class="heat-sum-label">净消耗 / 缓存</span>
+            <span class="heat-sum-val" id="h-sum-net">--</span>
+          </div>
+          <div class="heat-sum-item">
+            <span class="heat-sum-label">活跃日均</span>
+            <span class="heat-sum-val" id="h-sum-active-avg">--</span>
+          </div>
+          <div class="heat-sum-item" title="按 Gemini 混合基准参考单价（Prompt $0.75/M · Cache 10% $0.075/M · Output $3.75/M）折算的 API 等值参考">
+            <span class="heat-sum-label">API 等值参考</span>
+            <span class="heat-sum-val" id="h-sum-cost" style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">--</span>
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11px;color:var(--ag-text-muted);flex-wrap:wrap;gap:6px">
@@ -1245,6 +1312,8 @@
   const route = () => location.pathname.match(/^\/c\/([a-f\d-]{36})(?:\/|$)/i)?.[1] || null;
   let activeHeatView = 'daily';
   let heatPageOffset = 0;
+  let heatMonthOffset = 0;
+  let heatYearOffset = 0;
 
   // =========================================================================
   // 模块 1: 0 级主题跟随、面板与菜单统一背景色、热力图 5 档色阶与自定义颜色选取器
@@ -1674,6 +1743,8 @@
     applyHeatmapPalette();
     syncSwatchAndResetButtons();
     if (activeHeatView === 'weekly') renderHeatmapWeekly();
+    else if (activeHeatView === 'monthly') renderHeatmapMonthly();
+    else if (activeHeatView === 'yearly') renderHeatmapYearly();
     else if (activeHeatView === 'cum') renderHeatmapCum();
   }
 
@@ -1738,6 +1809,8 @@
     applyHeatmapPalette();
     syncSwatchAndResetButtons();
     if (activeHeatView === 'weekly') renderHeatmapWeekly();
+    else if (activeHeatView === 'monthly') renderHeatmapMonthly();
+    else if (activeHeatView === 'yearly') renderHeatmapYearly();
     else if (activeHeatView === 'cum') renderHeatmapCum();
     syncNativeOverlayTheme();
   }
@@ -1750,8 +1823,12 @@
       const cs = (rootEl && typeof window.getComputedStyle === 'function') ? window.getComputedStyle(rootEl) : null;
       const bg = cs?.getPropertyValue?.('--background')?.trim() || (isLight ? '#FAFAFA' : '#131313');
       const fg = cs?.getPropertyValue?.('--foreground')?.trim() || (isLight ? '#383A42' : '#FAFAFA');
+      const titlebar = findHostTitlebar();
+      const tbRect = titlebar?.getBoundingClientRect ? titlebar.getBoundingClientRect() : null;
+      const topMenuBarBottom = (tbRect && tbRect.height > 0 && tbRect.top >= 20) ? Math.round(tbRect.top) : 0;
+      const targetHeightCssPx = topMenuBarBottom > 0 ? Math.max(28, Math.min(40, topMenuBarBottom)) : 40;
       if (typeof window.contextMeterAPI?.syncOverlay === 'function') {
-        void window.contextMeterAPI.syncOverlay({ color: bg, symbolColor: fg, heightCssPx: 40 });
+        void window.contextMeterAPI.syncOverlay({ color: bg, symbolColor: fg, heightCssPx: targetHeightCssPx });
       } else if (typeof window.electronNative?.setTitleBarOverlay === 'function') {
         void window.electronNative.setTitleBarOverlay({ color: bg, symbolColor: fg });
       }
@@ -2122,10 +2199,11 @@
       if (typeof document.querySelector !== 'function') return null;
       const auxToggle = document.querySelector('[data-testid="toggle-aux-sidebar"]');
       if (auxToggle?.closest) {
-        const cluster = auxToggle.closest('div.absolute.right-0.top-0');
+        const cluster = auxToggle.closest('div.absolute.right-0.top-0') || auxToggle.closest('div.absolute.right-0');
         if (cluster) return cluster;
       }
-      return document.querySelector('div.h-screen.w-screen > div.flex-1 > div.absolute.right-0.top-0.z-50');
+      return document.querySelector('div.h-screen.w-screen > div.flex-1 > div.absolute.right-0.top-0.z-50')
+        || document.querySelector('div.h-screen.w-screen > div.flex-1 > div.absolute.right-0.z-50');
     } catch {
       return null;
     }
@@ -2138,8 +2216,13 @@
       if (/^Mac|iPhone|iPad/i.test(plat)) return 0;
       if (topRight?.getBoundingClientRect) {
         const tr = topRight.getBoundingClientRect();
-        // 若顶部已单独渲染菜单栏（top >= 20），则 40px 工具栏不在窗口顶边，无需重复留白
+        // 若顶部已单独渲染菜单栏（top >= 20，如 v2.30+ 35px 菜单栏），则 40px 工具栏不在窗口顶边，无需重复留白
         if (tr.height > 0 && tr.top >= 20) return 0;
+      }
+      const titlebar = findHostTitlebar();
+      if (titlebar?.getBoundingClientRect) {
+        const tb = titlebar.getBoundingClientRect();
+        if (tb.height > 0 && tb.top >= 20) return 0;
       }
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 0;
       // 优先 1: 标准 WCO 接口 navigator.windowControlsOverlay
@@ -2312,9 +2395,9 @@
       }
       const auxToggle = document.querySelector('[data-testid="toggle-aux-sidebar"]');
       if (auxToggle?.closest) {
-        return auxToggle.closest('div.absolute.right-0.top-0') || auxToggle;
+        return auxToggle.closest('div.absolute.right-0.top-0') || auxToggle.closest('div.absolute.right-0') || auxToggle;
       }
-      return document.querySelector('div.absolute.right-0.top-0');
+      return document.querySelector('div.absolute.right-0.top-0') || document.querySelector('div.absolute.right-0.z-50');
     } catch {
       return null;
     }
@@ -2642,8 +2725,8 @@
     if (!error || value?.error) return value;
     const lastStep = Math.max(-1, ...(metadata?.stepIndices || []), metadata?.chatModel?.chatStartMetadata?.startStepIndex ?? -1);
     if (lastStep > error.index) return value;
-    const failure = summarize({ chatModel: { retryInfos: [{ error: error.text }] } });
-    return { ...(value || {}), ...failure, model: value?.model || '', used: null, estimate: null, actual: null, percent: null };
+    const failure = summarize({ chatModel: { retryInfos: [{ error: error.text }] } }, { previousValidContext: value });
+    return { ...(value || {}), ...failure, model: value?.model || '' };
   }
 
   function isAnyPanelOpen() {
@@ -2799,10 +2882,42 @@
   btnTokenColors?.addEventListener('click', () => toggleTokenColorsDrawer());
   el('heat-legend-scale')?.addEventListener('click', () => toggleTokenColorsDrawer(true));
 
-  // 热力图视图切换（每天 / 每周 / 累计总量）
+  // 热力图视图切换（每天 / 每周 / 每月 / 今年 / 累计总量）与胶囊滑块动画
+  function updateHeatTabThumb() {
+    const thumb = el('h-tab-thumb');
+    const wrap = el('h-tabs-wrap');
+    if (!thumb || !wrap) return;
+    const map = {
+      daily: el('h-tab-daily'),
+      weekly: el('h-tab-weekly'),
+      monthly: el('h-tab-monthly'),
+      yearly: el('h-tab-yearly'),
+      cum: el('h-tab-cum')
+    };
+    const activeBtn = map[activeHeatView] || map.daily;
+    if (!activeBtn) return;
+    try {
+      const wRect = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : null;
+      const bRect = activeBtn.getBoundingClientRect ? activeBtn.getBoundingClientRect() : null;
+      if (wRect && bRect && bRect.width > 0) {
+        const left = Math.max(0, bRect.left - wRect.left);
+        thumb.style.width = `${bRect.width}px`;
+        thumb.style.transform = `translateX(${left}px)`;
+      } else if (typeof activeBtn.offsetLeft === 'number' && activeBtn.offsetWidth > 0) {
+        thumb.style.width = `${activeBtn.offsetWidth}px`;
+        thumb.style.transform = `translateX(${activeBtn.offsetLeft}px)`;
+      }
+    } catch {}
+  }
+
   function renderActiveHeatView(forceRebuild = false) {
+    updateHeatTabThumb();
     if (activeHeatView === 'weekly') {
       renderHeatmapWeekly();
+    } else if (activeHeatView === 'monthly') {
+      renderHeatmapMonthly();
+    } else if (activeHeatView === 'yearly') {
+      renderHeatmapYearly();
     } else if (activeHeatView === 'cum') {
       renderHeatmapCum();
     } else {
@@ -2812,49 +2927,75 @@
 
   function switchHeatView(view) {
     activeHeatView = view;
-    const tDaily = el('h-tab-daily');
-    const tWeekly = el('h-tab-weekly');
-    const tCum = el('h-tab-cum');
-    const bDaily = el('h-daily-box');
-    const bWeekly = el('h-weekly-box');
-    const bCum = el('h-cum-box');
+    const tabs = {
+      daily: el('h-tab-daily'),
+      weekly: el('h-tab-weekly'),
+      monthly: el('h-tab-monthly'),
+      yearly: el('h-tab-yearly'),
+      cum: el('h-tab-cum')
+    };
+    const boxes = {
+      daily: el('h-daily-box'),
+      weekly: el('h-weekly-box'),
+      monthly: el('h-monthly-box'),
+      yearly: el('h-yearly-box'),
+      cum: el('h-cum-box')
+    };
 
-    tDaily.classList.remove('active');
-    tWeekly.classList.remove('active');
-    tCum.classList.remove('active');
-    bDaily.style.display = 'none';
-    bWeekly.style.display = 'none';
-    bCum.style.display = 'none';
+    for (const [k, btn] of Object.entries(tabs)) {
+      if (!btn) continue;
+      if (btn.classList?.toggle) btn.classList.toggle('active', k === view);
+      else btn.className = k === view ? 'heat-tab-btn active' : 'heat-tab-btn';
+    }
+    for (const box of Object.values(boxes)) {
+      if (box) box.style.display = 'none';
+    }
     hidePopover();
+    updateHeatTabThumb();
 
     if (view === 'weekly') {
-      tWeekly.classList.add('active');
-      bWeekly.style.display = 'flex';
+      if (boxes.weekly) boxes.weekly.style.display = 'flex';
       renderHeatmapWeekly();
+    } else if (view === 'monthly') {
+      if (boxes.monthly) boxes.monthly.style.display = 'flex';
+      renderHeatmapMonthly();
+    } else if (view === 'yearly') {
+      if (boxes.yearly) boxes.yearly.style.display = 'flex';
+      renderHeatmapYearly();
     } else if (view === 'cum') {
-      tCum.classList.add('active');
-      bCum.style.display = 'block';
+      if (boxes.cum) boxes.cum.style.display = 'block';
       renderHeatmapCum();
     } else {
-      tDaily.classList.add('active');
-      bDaily.style.display = 'block';
+      if (boxes.daily) boxes.daily.style.display = 'block';
       renderHeatmapGrid(true);
     }
   }
 
   el('h-tab-daily')?.addEventListener('click', () => switchHeatView('daily'));
   el('h-tab-weekly')?.addEventListener('click', () => switchHeatView('weekly'));
+  el('h-tab-monthly')?.addEventListener('click', () => switchHeatView('monthly'));
+  el('h-tab-yearly')?.addEventListener('click', () => switchHeatView('yearly'));
   el('h-tab-cum')?.addEventListener('click', () => switchHeatView('cum'));
 
   el('h-page-prev')?.addEventListener('click', () => {
-    heatPageOffset -= 1;
+    if (activeHeatView === 'monthly') {
+      heatMonthOffset -= 1;
+    } else if (activeHeatView === 'yearly') {
+      heatYearOffset -= 1;
+    } else {
+      heatPageOffset -= 1;
+    }
     renderActiveHeatView(true);
   });
   el('h-page-next')?.addEventListener('click', () => {
-    if (heatPageOffset < 0) {
+    if (activeHeatView === 'monthly') {
+      if (heatMonthOffset < 0) heatMonthOffset += 1;
+    } else if (activeHeatView === 'yearly') {
+      if (heatYearOffset < 0) heatYearOffset += 1;
+    } else if (heatPageOffset < 0) {
       heatPageOffset += 1;
-      renderActiveHeatView(true);
     }
+    renderActiveHeatView(true);
   });
 
   el('refresh').addEventListener('click', () => { if (state.route && !state.scanBusy) void scan(state.generation, state.route, true); });
@@ -3025,11 +3166,32 @@
     const firstBadge = el('first-use-badge');
     if (firstBadge) firstBadge.textContent = `首次使用：${formatZhYmd(firstStr)}`;
     const rangeEl = el('h-win-range');
-    if (rangeEl) rangeEl.textContent = `${formatDotYmd(winStart)} – ${formatDotYmd(winEnd)}`;
     const prevBtn = el('h-page-prev');
     const nextBtn = el('h-page-next');
-    if (prevBtn) prevBtn.disabled = !canPrev;
-    if (nextBtn) nextBtn.disabled = !canNext;
+
+    if (activeHeatView === 'monthly') {
+      const minMonthIdx = firstDate.getFullYear() * 12 + firstDate.getMonth();
+      const curMonthIdx = today.getFullYear() * 12 + today.getMonth();
+      const minOffset = minMonthIdx - curMonthIdx;
+      if (heatMonthOffset < minOffset) heatMonthOffset = minOffset;
+      if (heatMonthOffset > 0) heatMonthOffset = 0;
+      const targetDate = new Date(today.getFullYear(), today.getMonth() + heatMonthOffset, 1);
+      if (rangeEl) rangeEl.textContent = `${targetDate.getFullYear()}年${targetDate.getMonth() + 1}月`;
+      if (prevBtn) prevBtn.disabled = heatMonthOffset <= minOffset;
+      if (nextBtn) nextBtn.disabled = heatMonthOffset >= 0;
+    } else if (activeHeatView === 'yearly') {
+      const minYearOffset = firstDate.getFullYear() - today.getFullYear();
+      if (heatYearOffset < minYearOffset) heatYearOffset = minYearOffset;
+      if (heatYearOffset > 0) heatYearOffset = 0;
+      const targetYear = today.getFullYear() + heatYearOffset;
+      if (rangeEl) rangeEl.textContent = `${targetYear}年度 (1月 – 12月)`;
+      if (prevBtn) prevBtn.disabled = heatYearOffset <= minYearOffset;
+      if (nextBtn) nextBtn.disabled = heatYearOffset >= 0;
+    } else {
+      if (rangeEl) rangeEl.textContent = `${formatDotYmd(winStart)} – ${formatDotYmd(winEnd)}`;
+      if (prevBtn) prevBtn.disabled = !canPrev;
+      if (nextBtn) nextBtn.disabled = !canNext;
+    }
 
     return { firstStr, firstDate, today, winStart, winEnd, totalDays, canPrev, canNext };
   }
@@ -3223,18 +3385,38 @@
     }
   }
 
+  function updateSummaryBar(dateKeys = []) {
+    const sumTokensEl = el('h-sum-tokens');
+    const sumNetEl = el('h-sum-net');
+    const sumActiveAvgEl = el('h-sum-active-avg');
+    const sumCostEl = el('h-sum-cost');
+    if (!sumTokensEl || !sumCostEl) return;
+
+    const win = computeTimelineWindow();
+    const todayStr = formatLocalYmd(win.today);
+    const agg = typeof calculateIntervalCost === 'function'
+      ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, dateKeys, { todayStr })
+      : { totalTokens: 0, netTokens: 0, cacheRatio: 0, activeDays: 0, activeDailyAverageTokens: 0, totalCostUSD: 0 };
+
+    sumTokensEl.textContent = `${fmtYi(agg.totalTokens)} Tokens`;
+    if (sumNetEl) {
+      sumNetEl.textContent = agg.totalTokens > 0
+        ? `净 ${fmtYi(agg.netTokens)} · 缓存 ${agg.cacheRatio}%`
+        : '0 · 缓存 0%';
+    }
+    if (sumActiveAvgEl) {
+      sumActiveAvgEl.textContent = agg.activeDays > 0
+        ? `${fmtYi(agg.activeDailyAverageTokens)}/天 (${agg.activeDays}天)`
+        : '0/天 (0天)';
+    }
+    sumCostEl.textContent = `≈ $${agg.totalCostUSD.toFixed(2)}`;
+  }
+
   function renderHeatmapGrid(forceRebuild = false) {
     const colsBox = el('h-grid-cols');
     const monthsBox = el('h-months');
     if (!colsBox || !monthsBox) return;
     const win = computeTimelineWindow();
-    const sig = `${win.firstStr}:${formatLocalYmd(win.winStart)}:${Object.keys(ANTIGRAVITY_TOKEN_DATA.dailyMap).length}`;
-    if (!forceRebuild && colsBox.children.length > 0 && colsBox.getAttribute('data-sig') === sig) return;
-
-    colsBox.replaceChildren();
-    monthsBox.replaceChildren();
-    colsBox.setAttribute('data-sig', sig);
-
     const todayKey = formatLocalYmd(win.today);
     const list = [];
     for (let i = 0; i < win.totalDays; i++) {
@@ -3244,6 +3426,16 @@
       const rec = ANTIGRAVITY_TOKEN_DATA.dailyMap[key];
       list.push({ date: d, key, tokens: rec ? rec.total : 0, rec, isFuture, isToday: key === todayKey });
     }
+
+    const sig = `${win.firstStr}:${formatLocalYmd(win.winStart)}:${Object.keys(ANTIGRAVITY_TOKEN_DATA.dailyMap).length}`;
+    if (!forceRebuild && colsBox.children.length > 0 && colsBox.getAttribute('data-sig') === sig) {
+      updateSummaryBar(list.map(x => x.key));
+      return;
+    }
+
+    colsBox.replaceChildren();
+    monthsBox.replaceChildren();
+    colsBox.setAttribute('data-sig', sig);
 
     const monthMarkers = [];
     let lastM = -1;
@@ -3271,7 +3463,9 @@
 
         const showPop = () => {
           const d = item.date;
-          heatPopDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日${item.isToday ? '（今日）' : (item.key === win.firstStr ? '（首次使用）' : '')}`;
+          const costInfo = typeof getDailyReferenceCost === 'function' ? getDailyReferenceCost(item.rec) : { costUSD: 0 };
+          const costStr = costInfo.costUSD > 0 ? ` · ≈ $${costInfo.costUSD.toFixed(2)}` : '';
+          heatPopDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日${item.isToday ? '（今日）' : (item.key === win.firstStr ? '（首次使用）' : '')}${costStr}`;
           heatPopVal.textContent = item.tokens > 0 ? `${fmtYi(item.tokens)} Tokens` : (item.isFuture ? '未来日期（待产生记录）' : '0 Tokens');
           if (item.rec) {
             heatPopDet.innerHTML = `
@@ -3305,6 +3499,8 @@
       lbl.textContent = `${mm.month}月`;
       monthsBox.appendChild(lbl);
     });
+
+    updateSummaryBar(list.map(x => x.key));
   }
 
   function renderHeatmapWeekly() {
@@ -3317,21 +3513,25 @@
     const win = computeTimelineWindow();
     const totalWeeks = 52;
     const weeksData = [];
+    const allWinDates = [];
     let max = 1;
 
     for (let c = 0; c < totalWeeks; c++) {
       let sum = 0;
       let sDate = null, eDate = null;
+      const weekDates = [];
       for (let r = 0; r < 7; r++) {
         const d = addDays(win.winStart, c * 7 + r);
         const k = formatLocalYmd(d);
+        weekDates.push(k);
+        allWinDates.push(k);
         if (!sDate) sDate = d;
         eDate = d;
         const rec = ANTIGRAVITY_TOKEN_DATA.dailyMap[k];
         if (rec) sum += rec.total;
       }
       if (sum > max) max = sum;
-      weeksData.push({ sum, sDate, eDate, startKey: formatLocalYmd(sDate) });
+      weeksData.push({ sum, sDate, eDate, startKey: formatLocalYmd(sDate), weekDates });
     }
 
     weeksData.forEach(w => {
@@ -3342,13 +3542,18 @@
       fill.className = 'w-bar-fill';
       const pct = Math.max(3, (w.sum / max) * 100);
       fill.style.height = `${pct}%`;
-      fill.style.backgroundColor = w.sum === 0 ? cEmpty : (w.sum < 1e7 ? c1 : (w.sum < 5e7 ? c2 : (w.sum < 1.5e8 ? c3 : c4)));
+      const lvl = typeof getLvlForRange === 'function' ? getLvlForRange(w.sum, 'week', max) : (w.sum === 0 ? 0 : (w.sum < 1e7 ? 1 : (w.sum < 5e7 ? 2 : (w.sum < 1.5e8 ? 3 : 4))));
+      fill.style.backgroundColor = w.sum === 0 ? cEmpty : (scale[lvl] || c4);
       col.appendChild(fill);
 
       const showPop = () => {
+        const agg = typeof calculateIntervalCost === 'function'
+          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, w.weekDates, { todayStr: formatLocalYmd(win.today) })
+          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0 };
+        const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
         heatPopDate.textContent = `${w.sDate.getFullYear()}.${w.sDate.getMonth() + 1}.${w.sDate.getDate()} - ${w.eDate.getMonth() + 1}.${w.eDate.getDate()}`;
-        heatPopVal.textContent = w.sum > 0 ? `${fmtYi(w.sum)} Tokens` : '0 Tokens';
-        heatPopDet.innerHTML = `<span>Weekly Total · 周累计</span>`;
+        heatPopVal.textContent = w.sum > 0 ? `${fmtYi(w.sum)} Tokens${costStr}` : '0 Tokens';
+        heatPopDet.innerHTML = `<span>周累计 · 净 ${fmtYi(agg.netTokens)} · 缓存 ${agg.cacheRatio}%</span>`;
         heatPopDet.style.display = 'block';
         const r = col.getBoundingClientRect();
         heatPop.style.left = `${r.left + r.width / 2}px`;
@@ -3362,6 +3567,273 @@
 
       box.appendChild(col);
     });
+
+    updateSummaryBar(allWinDates);
+  }
+
+  function renderHeatmapMonthly() {
+    const box = el('h-monthly-box');
+    if (!box) return;
+    box.replaceChildren();
+
+    const scrollBox = el('h-scroll-box') || box.parentElement;
+    const rect = scrollBox && typeof scrollBox.getBoundingClientRect === 'function' ? scrollBox.getBoundingClientRect() : null;
+    const W = (rect && rect.width > 200) ? Math.floor(rect.width - 16) : 670;
+    const H = 95;
+
+    const scale = getEffectiveHeatmapScale();
+    const win = computeTimelineWindow();
+    const today = win.today;
+    const todayKey = formatLocalYmd(today);
+
+    const targetDate = new Date(today.getFullYear(), today.getMonth() + heatMonthOffset, 1);
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+
+    const gap = 5;
+    let bestC = daysInMonth, bestS = 0;
+    for (let r = 1; r <= 7; r++) {
+      const c = Math.ceil(daysInMonth / r);
+      const s = Math.min((W - (c - 1) * gap) / c, (H - (r - 1) * gap) / r);
+      if (s > bestS) {
+        bestS = s;
+        bestC = c;
+      }
+    }
+    bestS = Math.floor(bestS);
+    const showDayNum = bestS >= 22;
+
+    const grid = document.createElement('div');
+    grid.className = 'heat-month-grid';
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = `repeat(${bestC}, ${bestS}px)`;
+    grid.style.gridAutoRows = `${bestS}px`;
+    grid.style.gap = `${gap}px`;
+    grid.style.justifyContent = 'center';
+    grid.style.alignContent = 'center';
+    grid.style.height = `${H}px`;
+
+    const dateKeys = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(targetYear, targetMonth, day);
+      const k = formatLocalYmd(d);
+      dateKeys.push(k);
+      const isFuture = d.getTime() > today.getTime();
+      const isToday = k === todayKey;
+      const rec = ANTIGRAVITY_TOKEN_DATA.dailyMap[k];
+      const tokens = rec ? rec.total : 0;
+      const lvl = getLvl(tokens);
+
+      const cell = document.createElement('div');
+      cell.className = `heat-month-cell heat-cell lvl-${lvl}${isFuture ? ' is-future' : ''}${isToday ? ' is-today' : ''}`;
+      cell.style.width = `${bestS}px`;
+      cell.style.height = `${bestS}px`;
+      cell.style.backgroundColor = scale[lvl];
+      cell.setAttribute('data-date', k);
+      cell.setAttribute('data-tokens', String(tokens));
+
+      if (showDayNum) {
+        const numSpan = document.createElement('span');
+        numSpan.className = 'heat-month-cell-num';
+        numSpan.textContent = String(day);
+        cell.appendChild(numSpan);
+      }
+
+      const showPop = () => {
+        const costInfo = typeof getDailyReferenceCost === 'function' ? getDailyReferenceCost(rec) : { costUSD: 0 };
+        const costStr = costInfo.costUSD > 0 ? ` · ≈ $${costInfo.costUSD.toFixed(2)}` : '';
+        heatPopDate.textContent = `${targetYear}年${targetMonth + 1}月${day}日${isToday ? '（今日）' : ''}`;
+        heatPopVal.textContent = tokens > 0 ? `${fmtYi(tokens)} Tokens${costStr}` : (isFuture ? '未来日期（待产生记录）' : '0 Tokens');
+        if (rec) {
+          heatPopDet.innerHTML = `
+            <div class="pop-det-col"><span class="pop-det-val">Prompt: ${fmtYi(rec.input)}</span><span class="pop-det-trans">提示词</span></div>
+            <div class="pop-det-col"><span class="pop-det-val">Output: ${fmtYi(rec.output)}</span><span class="pop-det-trans">输出</span></div>
+            <div class="pop-det-col"><span class="pop-det-val">Cache: ${fmtYi(rec.cache)}</span><span class="pop-det-trans">缓存</span></div>
+          `.trim();
+          heatPopDet.style.display = 'flex';
+        } else {
+          heatPopDet.style.display = 'none';
+        }
+        const r = cell.getBoundingClientRect();
+        heatPop.style.left = `${r.left + r.width / 2}px`;
+        heatPop.style.top = `${r.top - 6}px`;
+        heatPop.style.opacity = '1';
+      };
+
+      cell.addEventListener('mouseenter', showPop);
+      cell.addEventListener('mouseleave', hidePopover);
+      cell.addEventListener('click', showPop);
+
+      grid.appendChild(cell);
+    }
+
+    box.appendChild(grid);
+    updateSummaryBar(dateKeys);
+  }
+
+  function renderHeatmapYearly() {
+    const box = el('h-yearly-box');
+    if (!box) return;
+    box.replaceChildren();
+
+    const scrollBox = el('h-scroll-box') || box.parentElement;
+    const rect = scrollBox && typeof scrollBox.getBoundingClientRect === 'function' ? scrollBox.getBoundingClientRect() : null;
+    const W = (rect && rect.width > 200) ? Math.floor(rect.width - 16) : 670;
+    const H = 95;
+
+    const scale = getEffectiveHeatmapScale();
+    const win = computeTimelineWindow();
+    const today = win.today;
+    const thisYear = today.getFullYear();
+    const thisMonth = today.getMonth();
+    const targetYear = thisYear + heatYearOffset;
+
+    const monthsData = [];
+    const allYearDates = [];
+    let maxMonthTokens = 1;
+
+    for (let m = 0; m < 12; m++) {
+      const daysCount = new Date(targetYear, m + 1, 0).getDate();
+      let mTokens = 0;
+      const mDates = [];
+      for (let d = 1; d <= daysCount; d++) {
+        const dateObj = new Date(targetYear, m, d);
+        const k = formatLocalYmd(dateObj);
+        mDates.push(k);
+        allYearDates.push(k);
+        const rec = ANTIGRAVITY_TOKEN_DATA.dailyMap[k];
+        if (rec) mTokens += rec.total;
+      }
+      const isCurrent = (targetYear === thisYear && m === thisMonth);
+      const isFuture = (targetYear > thisYear || (targetYear === thisYear && m > thisMonth));
+      if (!isFuture && mTokens > maxMonthTokens) {
+        maxMonthTokens = mTokens;
+      }
+      monthsData.push({
+        monthIndex: m,
+        monthName: `${m + 1}月`,
+        tokens: mTokens,
+        dates: mDates,
+        isCurrent,
+        isFuture
+      });
+    }
+
+    const createSvgNode = tag => {
+      if (typeof document !== 'undefined' && typeof document.createElementNS === 'function') {
+        return document.createElementNS('http://www.w3.org/2000/svg', tag);
+      }
+      return document.createElement(tag);
+    };
+
+    const svg = createSvgNode('svg');
+    svg.setAttribute('class', 'heat-yearly-svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('width', String(W));
+    svg.setAttribute('height', String(H));
+
+    const Rmin = 6;
+    const Rmax = 24;
+    const colW = W / 12;
+    const cy = 42;
+
+    let peakMonthIndex = -1;
+    let peakTokens = 0;
+    monthsData.forEach(item => {
+      if (!item.isFuture && item.tokens > peakTokens) {
+        peakTokens = item.tokens;
+        peakMonthIndex = item.monthIndex;
+      }
+    });
+
+    monthsData.forEach((item, idx) => {
+      const cx = colW * idx + colW / 2;
+      const g = createSvgNode('g');
+      g.setAttribute('class', 'heat-yearly-bubble-group');
+      g.style.animationDelay = `${idx * 18}ms`;
+
+      let radius = Rmin;
+      if (!item.isFuture && item.tokens > 0) {
+        const ratio = Math.sqrt(item.tokens / maxMonthTokens);
+        radius = Rmin + ratio * (Rmax - Rmin);
+      }
+
+      const lvl = item.isFuture ? 0 : (typeof getLvlForRange === 'function' ? getLvlForRange(item.tokens, 'month', maxMonthTokens) : getLvl(item.tokens));
+      const fillCol = item.isFuture ? 'transparent' : (scale[lvl] || scale[0]);
+
+      const circle = createSvgNode('circle');
+      circle.setAttribute('class', 'bubble-main');
+      circle.setAttribute('cx', String(cx));
+      circle.setAttribute('cy', String(cy));
+      circle.setAttribute('r', String(radius));
+      circle.setAttribute('fill', fillCol);
+      circle.setAttribute('stroke', item.isFuture ? 'rgba(255,255,255,0.18)' : (item.monthIndex === peakMonthIndex ? 'var(--ag-text-primary)' : 'rgba(255,255,255,0.08)'));
+      circle.setAttribute('stroke-width', item.monthIndex === peakMonthIndex ? '1.8' : '1');
+      if (item.isFuture) {
+        circle.setAttribute('stroke-dasharray', '2,2');
+      }
+      g.appendChild(circle);
+
+      if (item.isCurrent) {
+        const activeRing = createSvgNode('circle');
+        activeRing.setAttribute('cx', String(cx));
+        activeRing.setAttribute('cy', String(cy));
+        activeRing.setAttribute('r', String(radius + 4));
+        activeRing.setAttribute('fill', 'none');
+        activeRing.setAttribute('stroke', 'var(--ag-custom-token-accent,var(--ag-token-accent-default,#d97757))');
+        activeRing.setAttribute('stroke-width', '1.5');
+        activeRing.setAttribute('stroke-dasharray', '3,3');
+        g.appendChild(activeRing);
+      }
+
+      if (item.monthIndex === peakMonthIndex && item.tokens > 0) {
+        const peakBadge = createSvgNode('text');
+        peakBadge.setAttribute('x', String(cx));
+        peakBadge.setAttribute('y', String(cy - radius - 5));
+        peakBadge.setAttribute('text-anchor', 'middle');
+        peakBadge.setAttribute('font-size', '8.5');
+        peakBadge.setAttribute('font-weight', '600');
+        peakBadge.setAttribute('fill', 'var(--ag-custom-token-accent,var(--ag-token-accent-default,#d97757))');
+        peakBadge.textContent = '峰值';
+        g.appendChild(peakBadge);
+      }
+
+      const text = createSvgNode('text');
+      text.setAttribute('x', String(cx));
+      text.setAttribute('y', String(H - 12));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('font-size', '10');
+      text.setAttribute('fill', item.isCurrent ? 'var(--ag-text-primary)' : 'var(--ag-text-muted)');
+      text.setAttribute('font-weight', item.isCurrent ? '600' : '400');
+      text.textContent = item.monthName;
+      g.appendChild(text);
+
+      const showPop = () => {
+        const agg = typeof calculateIntervalCost === 'function'
+          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, item.dates, { todayStr: formatLocalYmd(win.today) })
+          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0, activeDays: 0 };
+        const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
+        heatPopDate.textContent = `${targetYear}年${item.monthName}${item.isCurrent ? '（进行中）' : (item.monthIndex === peakMonthIndex ? '（年度峰值）' : '')}`;
+        heatPopVal.textContent = item.tokens > 0 ? `${fmtYi(item.tokens)} Tokens${costStr}` : (item.isFuture ? '未来月份（尚未产生用量）' : '0 Tokens');
+        heatPopDet.innerHTML = `<span>月度合计 · 净 ${fmtYi(agg.netTokens)} · 缓存 ${agg.cacheRatio}% (活跃 ${agg.activeDays} 天)</span>`;
+        heatPopDet.style.display = 'block';
+
+        const r = g.getBoundingClientRect ? g.getBoundingClientRect() : { left: cx, top: cy, width: radius * 2 };
+        heatPop.style.left = `${r.left + (r.width || 0) / 2}px`;
+        heatPop.style.top = `${r.top - 6}px`;
+        heatPop.style.opacity = '1';
+      };
+
+      g.addEventListener('mouseenter', showPop);
+      g.addEventListener('mouseleave', hidePopover);
+      g.addEventListener('click', showPop);
+
+      svg.appendChild(g);
+    });
+
+    box.appendChild(svg);
+    updateSummaryBar(allYearDates);
   }
 
   function renderHeatmapCum() {
@@ -3405,7 +3877,7 @@
 
     const scale = getEffectiveHeatmapScale();
     const strokeColor = customColors.tokenAccent || scale[4];
-    const strokeRgb = hexToRgb(normalizeHex(strokeColor)) || { r: 192, g: 132, b: 252 };
+    const strokeRgb = hexToRgb(normalizeHex(strokeColor)) || { r: 217, g: 119, b: 87 };
     const grad = ctx.createLinearGradient(0, 0, 0, height);
     grad.addColorStop(0, `rgba(${strokeRgb.r}, ${strokeRgb.g}, ${strokeRgb.b}, 0.36)`);
     grad.addColorStop(1, `rgba(${strokeRgb.r}, ${strokeRgb.g}, ${strokeRgb.b}, 0.02)`);
@@ -3445,8 +3917,13 @@
       const mouseX = e.clientX - r.left;
       const idx = points.length === 1 ? 0 : Math.min(points.length - 1, Math.max(0, Math.round(mouseX / step)));
       const pt = points[idx];
+      const cumDates = Object.keys(map).filter(k => k <= pt.key);
+      const agg = typeof calculateIntervalCost === 'function'
+        ? calculateIntervalCost(map, cumDates, { todayStr: formatLocalYmd(win.today) })
+        : { totalCostUSD: 0 };
+      const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
       heatPopDate.textContent = `${pt.date.getFullYear()}年${pt.date.getMonth() + 1}月${pt.date.getDate()}日 (累计)`;
-      heatPopVal.textContent = `${fmtYi(pt.val)} Tokens`;
+      heatPopVal.textContent = `${fmtYi(pt.val)} Tokens${costStr}`;
       heatPopDet.innerHTML = `<span>Cumulative Total · 自首次使用日 (${win.firstStr}) 累计</span>`;
       heatPopDet.style.display = 'block';
       heatPop.style.left = `${e.clientX}px`;
@@ -3454,6 +3931,10 @@
       heatPop.style.opacity = '1';
     };
     cvs.onmouseleave = hidePopover;
+
+    const allWinDates = [];
+    for (let i = 0; i < win.totalDays; i++) allWinDates.push(formatLocalYmd(addDays(win.winStart, i)));
+    updateSummaryBar(allWinDates);
   }
 
   // 初始化首次使用日与时间轴显示并触发后台完整历史同步
@@ -3509,11 +3990,14 @@
         ? `已超上限，共 ${fmtBubbleToken(d.serviceLimit)} token`
         : '服务端已拒绝输入（超出容量上限）';
     } else if (d?.error) {
-      tipTitle.textContent = '上下文窗口（请求异常）：';
-      tipPct.textContent = '最近请求失败（占用未知）';
-      tipDetail.textContent = d?.budget
-        ? `预算上限 ${fmtBubbleToken(d.budget)} token`
-        : '暂无有效的新用量统计';
+      const ec = d.errorClassification;
+      tipTitle.textContent = `上下文窗口（${ec?.shortBadge || '请求异常'}）：`;
+      tipPct.textContent = ec?.headline || '最近请求失败（占用未知）';
+      tipDetail.textContent = d?.actual != null && d?.budget
+        ? `保留上次上下文 ${fmtBubbleToken(d.actual)} / ${fmtBubbleToken(d.budget)} token`
+        : (d?.budget
+          ? `预算上限 ${fmtBubbleToken(d.budget)} token`
+          : '暂无有效的新用量统计');
     } else if (stale && d?.actual != null && d?.budget) {
       const usedRound = Math.min(100, Math.max(0, Math.round((d.actual / d.budget) * 100)));
       const remRound = Math.max(0, 100 - usedRound);
@@ -3582,7 +4066,12 @@
     if (d?.exceeded) {
       ctxAmount.textContent = isMinimal ? '100%' : '超限 (100%)';
     } else if (d?.error) {
-      ctxAmount.textContent = '异常';
+      const shortErr = d.errorClassification?.shortBadge || '异常';
+      if (d?.actual != null && !isMinimal) {
+        ctxAmount.textContent = `${short(d.actual)} (${shortErr})`;
+      } else {
+        ctxAmount.textContent = shortErr;
+      }
     } else if (d?.actual != null) {
       const pctRound = pct != null ? (pct > 0 && pct < 1 ? 1 : Math.round(pct)) : null;
       if (isMinimal) {
@@ -3653,7 +4142,19 @@
 
     updateRingAndBubble(d, session, pct, danger, stale, incomplete);
 
-    const status = d?.exceeded ? '服务端已拒绝：输入超限。本地估算不可靠，不能据此判断剩余空间。' : d?.error ? '最近请求失败。没有有效的新用量统计，请查看原始错误。' : stale ? '最近请求统计读取异常或延迟，不能判断剩余空间。' : state.scanError ? '全会话扫描未完成：' + state.scanError : incomplete ? `存在 ${session.unknownFiles} 个附件含未知内容；会话总量仍未计全，不能据此保证不会超限。` : d?.estimated ? '只有客户端估算，附件等内容可能未计全；当前请求真实占用未知。' : '请求用量与会话累计分别统计；会话 token 数始终为本地估算。';
+    const status = d?.exceeded
+      ? '服务端已拒绝：输入超限。本地估算不可靠，不能据此判断剩余空间。'
+      : d?.error
+        ? (d.errorClassification?.detail ? `${d.errorClassification.headline}：${d.errorClassification.detail}` : '最近请求失败。没有有效的新用量统计，请查看原始错误。')
+        : stale
+          ? '最近请求统计读取异常或延迟，不能判断剩余空间。'
+          : state.scanError
+            ? '全会话扫描未完成：' + state.scanError
+            : incomplete
+              ? `存在 ${session.unknownFiles} 个附件含未知内容；会话总量仍未计全，不能据此保证不会超限。`
+              : d?.estimated
+                ? '只有客户端估算，附件等内容可能未计全；当前请求真实占用未知。'
+                : '请求用量与会话累计分别统计；会话 token 数始终为本地估算。';
     el('status').textContent = status;
 
     const corpus = session ? `会话${range(session.total)}${incomplete ? '＋未知' : ''}` : state.scanBusy ? '会话扫描中…' : '会话待扫描';
@@ -3662,7 +4163,7 @@
       el('amount').textContent = '服务端超限';
       setHoverExtra(' · 100% 已溢出');
     } else if (d?.error) {
-      el('amount').textContent = '请求失败';
+      el('amount').textContent = d.errorClassification?.shortBadge || '请求失败';
       setHoverExtra('');
     } else if (stale) {
       el('amount').textContent = '统计延迟';
@@ -3717,11 +4218,12 @@
         if (keyRemaining) keyRemaining.textContent = '0 (已溢出)';
         if (keyTakeaway) keyTakeaway.textContent = `✖ 已超出服务端最大限制${d.serviceLimit ? `（${fmt(d.serviceLimit)} tokens）` : ''}，当前对话已被拒绝。需精简或新建会话。`;
       } else if (d?.error) {
-        if (keyBadge) { keyBadge.textContent = '异常'; keyBadge.className = 'key-pill pill-danger'; }
-        if (keyUsed) keyUsed.textContent = '—';
+        const ec = d.errorClassification;
+        if (keyBadge) { keyBadge.textContent = ec?.shortBadge || '异常'; keyBadge.className = 'key-pill pill-danger'; }
+        if (keyUsed) keyUsed.textContent = d?.actual != null ? `${short(d.actual)}${d?.budget ? ` (${((d.actual / d.budget) * 100).toFixed(1)}%)` : ''}` : '—';
         if (keyLimit) keyLimit.textContent = d?.budget ? short(d.budget) : '—';
-        if (keyRemaining) keyRemaining.textContent = '—';
-        if (keyTakeaway) keyTakeaway.textContent = '✖ 最近请求遇到错误，未产生有效的最新统计结果。';
+        if (keyRemaining) keyRemaining.textContent = (d?.actual != null && d?.budget) ? short(Math.max(0, d.budget - d.actual)) : '—';
+        if (keyTakeaway) keyTakeaway.textContent = ec?.detail ? `✖ ${ec.headline}：${ec.detail}` : '✖ 最近请求遇到错误，未产生有效的最新统计结果。';
       } else if (d?.actual != null && pct != null) {
         const limitVal = d.budget || 256000;
         const remainVal = Math.max(0, limitVal - d.actual);
@@ -3856,7 +4358,7 @@
     }
 
     el('model').textContent = d?.model?.startsWith('MODEL_PLACEHOLDER') ? '模型标识：' + d.model : d?.model || '未返回模型信息';
-    el('request-status').textContent = d?.exceeded ? '输入超限（已失败）' : d?.error ? '已失败' : d?.status === 'reported' ? '已返回实际统计' : d?.status === 'estimated' ? '只有本地估算' : '等待统计，未确认执行状态';
+    el('request-status').textContent = d?.exceeded ? '输入超限（已失败）' : d?.error ? (d.errorClassification?.shortBadge ? `${d.errorClassification.shortBadge}（已失败）` : '已失败') : d?.status === 'reported' ? '已返回实际统计' : d?.status === 'estimated' ? '只有本地估算' : '等待统计，未确认执行状态';
     el('actual').textContent = d?.actual != null ? token(d.actual) : d?.exceeded ? `>${fmt(d.serviceLimit || 0)}（实际总数未返回）` : '真实用量未知';
     if (d?.exceeded && !d.serviceLimit) el('actual').textContent = '已超限；实际数值未知';
     el('estimate').textContent = d?.estimate ? `约 ${fmt(d.estimate)} · ${d.exceeded ? '已证实低估' : '仅供参考'}` : '未提供';
@@ -3886,7 +4388,13 @@
       const data = await response.json(); if (generation !== state.generation || state.disposed) return;
       const rows = data.generatorMetadata || [];
       state.count = rows.length ? offset + rows.length : 0;
-      for (let i = rows.length - 1; i >= 0; i--) { const value = summarize(rows[i]); if (value) { state.latest = withStepError(value, rows[i]); break; } }
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const value = summarize(rows[i], { previousValidContext: state.latest });
+        if (value) {
+          state.latest = withStepError(value, rows[i]);
+          break;
+        }
+      }
       state.requestAt = Date.now(); state.requestError = '';
     } catch (e) { if (generation === state.generation && !state.disposed) state.requestError = e.name === 'AbortError' ? '读取超时' : e.message; }
     finally { clearTimeout(timeout); state.controllers.delete(controller); if (generation === state.generation && !state.disposed) { state.requestBusy = false; state.requestNext = Date.now() + (document.hidden ? 15000 : 3000); render(); } }
@@ -3932,6 +4440,13 @@
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
     version: '2.6.0',
+    ensureAlive: () => {
+      if (state.disposed) return false;
+      ensureHostDocked();
+      updateResponsiveLayout();
+      render();
+      return true;
+    },
     theme: () => resolveTheme(),
     setTheme: mode => { currentThemeMode = mode; try { localStorage.setItem('ag_theme_mode', mode); } catch {}; applyTheme(); },
     getCustomColors: () => ({ ...customColors }),
@@ -3945,6 +4460,11 @@
     openColorPicker,
     closeColorPicker,
     applyPickerHex,
+    switchHeatView,
+    getActiveHeatView: () => activeHeatView,
+    renderHeatmapMonthly,
+    renderHeatmapYearly,
+    updateHeatTabThumb,
     setTokenHistoryForTest: payload => {
       initialWindowHistoryApplied = true;
       return applyTokenHistoryPayload(payload);
