@@ -2239,9 +2239,9 @@
         const nativeZoom = window.electronNative?.getZoomLevel?.();
         if (typeof nativeZoom === 'number' && nativeZoom >= 0.25 && nativeZoom <= 5) {
           zoomFactor = nativeZoom;
-        } else if (window.outerWidth > 0 && window.innerWidth > 0) {
+        } else if (window.outerWidth > 0 && window.innerWidth > 0 && !(window.outerWidth === 160 && window.outerHeight === 28)) {
           const ratio = window.outerWidth / window.innerWidth;
-          if (ratio >= 0.25 && ratio <= 5) zoomFactor = ratio;
+          if (ratio >= 0.5 && ratio <= 5) zoomFactor = ratio;
         }
       }
       const rawCssWidth = Math.ceil(138 / zoomFactor);
@@ -2296,7 +2296,7 @@
           '  padding-right: calc(var(--right-cluster-width, 140px) - 4px) !important;',
           '}',
           wcoWidth > 0 ? [
-            `.agy-layout-vars { --right-cluster-width: ${44 + wcoWidth}px !important; }`,
+            `.agy-layout-vars, [data-testid="pane-titlebar-toolbar"] { --right-cluster-width: ${44 + wcoWidth}px !important; }`,
             '[class*="@container/titlebar"],',
             '[data-aux-pane-focus-scope="true"] > div[data-active-tab-id],',
             'div[role="navigation"][aria-label] > div.shrink-0:first-child {',
