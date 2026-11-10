@@ -4439,7 +4439,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '2.6.0',
+    version: '2.8.0',
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();

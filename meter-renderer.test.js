@@ -322,7 +322,7 @@ test('6 independent custom color slots support custom values, reset to theme def
 test('window controls overlay spacer, convPane flex-grow self-healing, and clean dispose', () => {
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
-  assert.equal(api.version, '2.6.0');
+  assert.equal(api.version, '2.8.0');
   api.dispose();
 });
 

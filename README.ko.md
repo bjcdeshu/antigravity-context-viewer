@@ -1,7 +1,7 @@
 # Antigravity 대화 컨텍스트 뷰어 & 토큰 사용량 대시보드 (Antigravity Context & Token Viewer)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-2.7.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Version-2.8.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18.x-brightgreen?logo=node.js" alt="Node Version">
   <img src="https://img.shields.io/badge/Dependencies-Zero-success" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform Support">

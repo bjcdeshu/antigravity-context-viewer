@@ -272,7 +272,7 @@ async function install(options = {}) {
     const previousInstalledSha256 = sha(fs.readFileSync(previousInstalledBackup));
 
     const manifest = {
-      meterVersion: '2.2.0',
+      meterVersion: '2.8.0',
       version,
       installed,
       backup,
