@@ -118,14 +118,21 @@ async function tryHotInject(options = {}) {
           .map(f => fs.readFileSync(path.join(__dirname, f), 'utf8'))
           .join('\n');
         try {
-          const { collectTokenHistory } = require('./meter-collector');
-          historyData = collectTokenHistory({ force: !onlyIfMissing });
+          const { collectTokenHistoryAsync } = require('./meter-collector');
+          historyData = await collectTokenHistoryAsync({
+            origin: new URL(target.url).origin,
+            force: !onlyIfMissing
+          });
         } catch {}
       }
 
-      const liveAssign = (liveInfo && liveInfo.origin === new URL(target.url).origin)
-        ? `window.__AGContextMeterLive=${JSON.stringify({ port: liveInfo.port, token: liveInfo.token })};`
-        : '';
+      let liveAlive = false;
+      if (liveInfo && liveInfo.pid && liveInfo.origin === new URL(target.url).origin) {
+        try { process.kill(liveInfo.pid, 0); liveAlive = true; } catch {}
+      }
+      const liveAssign = liveAlive
+        ? `window.__AGContextMeterLive=${JSON.stringify({ port: liveInfo.port, token: liveInfo.token, preferLive: true })};`
+        : 'window.__AGContextMeterLive=null;';
       const historyAssign = historyData
         ? `window.__AGContextMeterHistory=${JSON.stringify(historyData)};`
         : '';
@@ -272,7 +279,7 @@ async function install(options = {}) {
     const previousInstalledSha256 = sha(fs.readFileSync(previousInstalledBackup));
 
     const manifest = {
-      meterVersion: '2.8.0',
+      meterVersion: '2.9.0',
       version,
       installed,
       backup,

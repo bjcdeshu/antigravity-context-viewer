@@ -83,15 +83,16 @@ async function queryLiveWindow() {
       }));
     });
     ws.close();
-    return { running: true, cdpPort: port, pageFound: true, ...status };
+    return { running: true, cdpPort: port, pageFound: true, origin: new URL(target.url).origin, ...status };
   } catch (e) {
     return { running: false, error: e.message };
   }
 }
 
-async function ensureLiveBridgeIfNeeded() {
+async function ensureLiveBridgeIfNeeded(options = {}) {
   const live = await queryLiveWindow();
-  if (!live.running || !live.pageFound || live.hasIpcBridge) return;
+  if (!live.running || !live.pageFound) return;
+  if (live.hasIpcBridge && !options.allowAlongsideLegacyIpc) return;
   const stateDir = getStateDir();
   const liveSessionPath = fs.existsSync(path.join(stateDir, '.live-session.json'))
     ? path.join(stateDir, '.live-session.json')
@@ -101,7 +102,7 @@ async function ensureLiveBridgeIfNeeded() {
     try {
       const info = JSON.parse(fs.readFileSync(liveSessionPath, 'utf8'));
       process.kill(info.pid, 0);
-      if (!info.watchdog) {
+      if (!info.watchdog || (live.origin && info.origin !== live.origin)) {
         try { process.kill(info.pid); } catch {}
       } else {
         alive = await new Promise(resolve => {
@@ -181,13 +182,13 @@ async function main() {
 
   if (cmd === 'install') {
     console.log('🚀 [Antigravity 对话上下文查看器] 正在安装上下文可视化组件...');
-    await ensureLiveBridgeIfNeeded();
+    await ensureLiveBridgeIfNeeded({ allowAlongsideLegacyIpc: true });
     const manifest = await install({ path: customPath });
     await tryHotInject();
     console.log(`✅ ASAR 持久化注入完成: ${manifest.installed} (Antigravity v${manifest.version}, 校验 ${manifest.originalFilesVerified} 个原文件)`);
     console.log(`✅ 运行中窗口热挂载状态: ${manifest.liveInjected ? '已即时生效（无需重启）' : '将在下次启动 Antigravity 时自动生效'}`);
   } else if (cmd === 'live') {
-    await ensureLiveBridgeIfNeeded();
+    await ensureLiveBridgeIfNeeded({ allowAlongsideLegacyIpc: true });
     const ok = await tryHotInject();
     if (!ok) throw new Error('未检测到运行中的 Antigravity 主窗口，请先打开 Antigravity 或使用 node cli.js install。');
     console.log('✅ 已通过 CDP 热注入当前运行的 Antigravity 窗口！');

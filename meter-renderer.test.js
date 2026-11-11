@@ -322,7 +322,7 @@ test('6 independent custom color slots support custom values, reset to theme def
 test('window controls overlay spacer, convPane flex-grow self-healing, and clean dispose', () => {
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
-  assert.equal(api.version, '2.8.0');
+  assert.equal(api.version, '2.9.0');
   api.dispose();
 });
 
@@ -774,6 +774,106 @@ test('v2.30.0: fine-grained error classification preserves previous valid contex
 
   h.sandbox.__AGContextMeter.dispose();
 });
+
+test('v2.9.0: API equivalent cost cards, actual vs standard pricing toggle, model breakdown bar, popover attribution, and multi-turn session cost', async () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  h.finishScan();
+
+  // 1) Default pricing mode is 'actual' (occurrence-date promo rate)
+  assert.equal(api.getPricingMode(), 'actual');
+  assert.equal(h.elements.get('pricing-mode-toggle').textContent, '优惠期实价');
+  assert.equal(h.elements.get('ctx-pricing-mode-btn').textContent, '优惠期实价');
+
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  // Seed token history with multi-model attribution on todayStr
+  api.setTokenHistoryForTest({
+    firstTokenDate: todayStr,
+    dailyMap: {
+      [todayStr]: {
+        total: 10000000,
+        input: 1500000,
+        output: 500000,
+        cache: 8000000,
+        steps: 20,
+        models: {
+          'gemini-4-argon': { input: 1000000, cache: 6000000, output: 300000, total: 7300000, steps: 14 },
+          'gemini-4-carbon': { input: 500000, cache: 2000000, output: 200000, total: 2700000, steps: 6 }
+        }
+      }
+    }
+  });
+
+  h.elements.get('badge-tokens').click();
+  const actualTotalCostText = h.elements.get('t-total-cost').textContent;
+  const actualSumCostText = h.elements.get('h-sum-cost').textContent;
+  assert.match(actualTotalCostText, /^≈ \$\d+\.\d{2}$/);
+  assert.equal(h.elements.get('t-today-cost').textContent, actualTotalCostText);
+  assert.equal(actualSumCostText, actualTotalCostText);
+  assert.equal(h.elements.get('cost-model-bar').children.length, 2);
+  assert.match(h.elements.get('cost-model-legend').textContent, /^构成：Argon \$\d+\.\d{2} \(\d+%\) · Carbon \$\d+\.\d{2} \(\d+%\)$/);
+  assert.match(h.elements.get('cost-io-text').textContent, /^输入 \$\d+\.\d{2} · 输出 \$\d+\.\d{2} · 缓存 \$\d+\.\d{2}$/);
+  assert.match(h.elements.get('cost-saved-pill').textContent, /^缓存省 \$\d+\.\d{2}$/);
+
+  // 2) Clicking daily cell shows popover with model share % + cache savings while keeping 'Tokens' suffix
+  const firstCell = h.elements.get('h-grid-cols').children[0].children[0];
+  firstCell.click();
+  assert.match(h.elements.get('heat-pop-val').textContent, /Tokens$/);
+  assert.equal(h.elements.get('heat-pop-model').style.display, 'block');
+  assert.match(h.elements.get('heat-pop-model').textContent, /Argon \d+% · Carbon \d+% · 缓存省 \$/);
+
+  // 3) Toggle pricing mode to 'standard' (retail list price) -> costs increase when today is in Nov/Dec 2026 promo window
+  h.elements.get('pricing-mode-toggle').click();
+  assert.equal(api.getPricingMode(), 'standard');
+  assert.equal(h.elements.get('pricing-mode-toggle').textContent, '标准零售价');
+  assert.equal(h.elements.get('ctx-pricing-mode-btn').textContent, '标准零售价');
+  assert.equal(h.elements.get('h-sum-cost-lbl').textContent, 'API 等值(原价)');
+  const stdTotalNum = parseFloat(h.elements.get('t-total-cost').textContent.replace(/[^0-9.]/g, ''));
+  const actTotalNum = parseFloat(actualTotalCostText.replace(/[^0-9.]/g, ''));
+  assert.ok(stdTotalNum >= actTotalNum);
+
+  // 4) Multi-turn GetCascadeTrajectoryGeneratorMetadata response populates Current Session API Equivalent section
+  h.pending[0].resolve({
+    ok: true,
+    json: async () => ({
+      generatorMetadata: [
+        {
+          chatModel: {
+            model: 'MODEL_PLACEHOLDER_M437',
+            usage: { responseId: 'r1', inputTokens: 20000, cacheReadTokens: 80000, outputTokens: 1500 },
+            chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 1000000 } }
+          }
+        },
+        {
+          chatModel: {
+            model: 'MODEL_PLACEHOLDER_M419',
+            usage: { responseId: 'r2', inputTokens: 15000, cacheReadTokens: 100000, outputTokens: 2000 },
+            chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 1000000 } }
+          }
+        }
+      ]
+    })
+  });
+  await h.flush();
+
+  const stdSessTotal = h.elements.get('sess-cost-total').textContent;
+  assert.match(stdSessTotal, /^≈ \$/);
+  assert.match(h.elements.get('sess-cost-last').textContent, /^≈ \$/);
+  assert.match(h.elements.get('sess-cost-saved').textContent, /^\$/);
+  assert.match(h.elements.get('sess-cost-meta-left').textContent, /^2 轮请求 · Carbon \d+% · Argon \d+%$/);
+  assert.match(h.elements.get('sess-cost-meta-right').textContent, /^入 \$[\d.]+ · 出 \$[\d.]+ · 缓 \$[\d.]+$/);
+
+  // Clicking #ctx-pricing-mode-btn inside Current Session panel toggles back to 'actual' across both panels
+  h.elements.get('ctx-pricing-mode-btn').click();
+  assert.equal(api.getPricingMode(), 'actual');
+  assert.equal(h.elements.get('pricing-mode-toggle').textContent, '优惠期实价');
+  assert.equal(h.elements.get('t-total-cost').textContent, actualTotalCostText);
+
+  api.dispose();
+});
+
 
 
 

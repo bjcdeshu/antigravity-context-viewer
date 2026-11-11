@@ -1,8 +1,8 @@
 # Antigravity 对话上下文查看器 & Token 用量看板 (Antigravity Context & Token Viewer)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-2.8.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/Antigravity-2.30.0%2B-8B5CF6" alt="Antigravity 2.30.0+">
+  <img src="https://img.shields.io/badge/Version-2.9.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Antigravity-2.31.0%2B-8B5CF6" alt="Antigravity 2.31.0+">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18.x-brightgreen?logo=node.js" alt="Node Version">
   <img src="https://img.shields.io/badge/Dependencies-Zero-success" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform Support">
@@ -13,11 +13,28 @@
   <b>简体中文</b> | <a href="README.en.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.es.md">Español</a>
 </p>
 
-专为 **Google Antigravity 桌面客户端 (2.x / v2.30.0+)** 打造的原生级 **「单次会话上下文与生成监控 + 账号全局 Token 5 视图热力图 + 模型实时输出速度监控」** 全功能可视化套件。采用 **ASAR 持久化注入 + CDP 免重启热挂载** 架构，**零第三方 npm 依赖**，既支持双击脚本一键安装，也支持直接交给任何 AI 智能体（Antigravity / Codex / Claude Code / Cursor）一句话自动部署。
+专为 **Google Antigravity 桌面客户端 (2.x / v2.31.0+)** 打造的原生级 **「单次会话上下文与 API 等值监控 + 账号全局按模型归因 Token 5 视图热力图 + 模型实时输出速度监控」** 全功能可视化套件。采用 **ASAR 持久化注入 + CDP 免重启热挂载** 架构，**零第三方 npm 依赖**，既支持双击脚本一键安装，也支持直接交给任何 AI 智能体（Antigravity / Codex / Claude Code / Cursor）一句话自动部署。
 
 ---
 
-## 🔥 v2.8.0 核心升级亮点 (What's New in v2.8.0)
+## 🔥 v2.9.0 核心升级亮点 (What's New in v2.9.0)
+
+1. **真实多模型 API 等值估算引擎（Multi-Model API Valuation）**：
+   - 告别单一混合均价估算，直接对接宿主 `GetCascadeTrajectoryGeneratorMetadata` 与 `GetUserStatus` 模型目录，将每日及每轮 Token 精确归因至具体模型家族（`Gemini 4 Argon`、`Gemini 4 Carbon`、`Gemini 3.1 Pro`、`Gemini 3.8 Flash`、`Claude Opus 5.5 / 4.6`、`Claude Sonnet 5.5 / 4.6`、`GPT-OSS 120B` 等），并自动处理 `>200K` 长上下文阶梯单价；
+   - 支持 **「优惠期实价（含 Google 2026.11–12 限时特惠）」⇄「标准零售价」** 一键切换对比。
+2. **全局 Token 面板四维 `$` 徽标与无框「API 价值构成」微条 (`#h-cost-breakdown`)**：
+   - 顶部 **全量累计 / 今日使用 / 本月使用 / 年度使用** 四大卡片同步展示各自周期的 `$ USD` API 等值；
+   - 区间汇总栏下方新增去边框极简 **API 价值构成条**：包含 `4px` 按模型费用占比堆叠进度条、主力模型金额与占比图例、输入/输出/缓存三项成本拆分，以及醒目的 **Prompt Cache 缓存节省金额（`缓存省 $xxx`）**。
+3. **当前会话实时 API 等值 (`#session-cost-summary`) 与热力图悬浮模型归因**：
+   - 会话上下文面板新增无框「本会话 API 等值」模块，实时统计 **会话累计费用、最近一轮费用、本会话缓存已省金额** 与轮次模型占比，零额外网络轮询开销；
+   - 5 视图热力图（每天 / 每周 / 每月 / 今年 / 累计总量）悬浮与点击气泡同步展示当期主力模型费用占比及缓存节省金额。
+4. **增量归档性能与跨版本平滑保活加固**：
+   - 新增 `token_usage_archive_v3.json` 原子写盘（Write-Rename）与 `model_attribution_cache_v1.json` 会话增量归因缓存，热读取耗时低至 `~35ms`；
+   - 修复历史同步重入竞态（`pendingHistoryForce`）、窗口标题栏主题同步去重（`lastSyncedOverlayKey`）以及免重启升级场景下的跨进程模型归因保留。
+
+---
+
+## 📌 v2.8.0 既有核心特性回顾
 
 1. **Antigravity 原生克制 + Claude 暖调高雅视觉（Direction B）**：
    - 采用 `1px` 细腻半透明描边、毛玻璃顶栏胶囊与 **安静默认（Quiet-by-Default）** 交互准则——日常健康状态下自动收敛冗余提示，仅在上下文占用 `>= 80%` 或超限时展示醒目预警；
@@ -227,7 +244,7 @@ npm test
 node --test meter-core.test.js meter-renderer.test.js
 ```
 
-包含 42 项针对 Token 缓存去重、服务端超限与细粒度错误分类、异步会话切换防串染、5 视图热力图与区间汇总底栏、7 套色阶预设与 5 档独立自定义、原生 Overview 浮层互斥、双层/单行顶栏自适应及双面板定位的完整回归测试。
+包含 44 项针对多模型 API 等值计价（优惠期实价 vs 标准零售价、`>200K` 分档、Prompt Cache 节省额与多轮会话成本）、Token 缓存去重、服务端超限与细粒度错误分类、异步会话切换防串染、5 视图热力图与区间汇总底栏、7 套色阶预设与 5 档独立自定义、原生 Overview 浮层互斥、双层/单行顶栏自适应及双面板定位的完整回归测试。
 
 ---
 

@@ -287,5 +287,101 @@ test('classifyRequestError distinguishes context deadline exceeded from context 
   assert.ok(interval.totalCostUSD > 0);
 });
 
+test('v2.9.0: per-model pricing catalog, placeholder mapping, promo vs standard pricing modes, and session cost tracking', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const {
+    normalizeModelFamily,
+    resolveModelDisplayLabel,
+    getModelRates,
+    calculateTurnCost,
+    calculateSessionCost,
+    getDailyReferenceCost,
+    calculateIntervalCost
+  } = require('./meter-core');
+  const { collectTokenHistoryAsync } = require('./meter-collector');
+
+  // 1) Placeholder & display name resolution for v2.31.0 models
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M437'), 'gemini-4-carbon');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M417'), 'gemini-4-argon');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M322'), 'gemini-3.1-pro');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M400'), 'claude-opus-5-5');
+  assert.equal(resolveModelDisplayLabel('MODEL_PLACEHOLDER_M427'), 'Gemini 4 Carbon (High)');
+  assert.equal(resolveModelDisplayLabel('MODEL_PLACEHOLDER_M437'), 'Gemini 4 Carbon (Medium)');
+  assert.equal(resolveModelDisplayLabel('MODEL_PLACEHOLDER_M438'), 'Gemini 4 Carbon (Low)');
+
+  // 2) Official Promo (actual) vs Standard Retail pricing & date window cutoff
+  const argonPromo = getModelRates('Gemini 4 Argon (High)', { pricingMode: 'actual', dateKey: '2026-11-11' });
+  const argonStd = getModelRates('Gemini 4 Argon (High)', { pricingMode: 'standard', dateKey: '2026-11-11' });
+  const argonPostPromo = getModelRates('Gemini 4 Argon (High)', { pricingMode: 'actual', dateKey: '2027-01-15' });
+  assert.ok(argonPromo.input < argonStd.input, 'Nov 2026 promo rate should be lower than standard retail rate');
+  assert.equal(argonPostPromo.input, argonStd.input, 'After promo window expires, actual mode uses standard rate');
+
+  // >200K long-context tiering on Gemini 3.1 Pro single turn
+  const shortTurn = calculateTurnCost({ model: 'Gemini 3.1 Pro', input: 100000, cache: 50000, output: 2000, dateKey: '2026-11-11' }, { pricingMode: 'actual' });
+  const longTurn = calculateTurnCost({ model: 'Gemini 3.1 Pro', input: 150000, cache: 100000, output: 2000, dateKey: '2026-11-11' }, { pricingMode: 'actual' });
+  assert.ok(longTurn.costUSD > shortTurn.costUSD * 2, '>200K prompt tokens trigger longContext tier');
+  assert.ok(longTurn.cacheSavedUSD > 0, 'Prompt cache savings are tracked accurately');
+
+  // 3) Daily & Interval per-model attribution with residual unattributed fallback
+  const rec = {
+    total: 5000000,
+    input: 800000,
+    cache: 4000000,
+    output: 200000,
+    steps: 20,
+    models: {
+      'gemini-4-argon': { input: 500000, cache: 2500000, output: 120000, total: 3120000, steps: 12 },
+      'gemini-4-carbon': { input: 200000, cache: 1000000, output: 60000, total: 1260000, steps: 6 }
+    }
+  };
+  const dailyAct = getDailyReferenceCost(rec, { dateKey: '2026-11-11', pricingMode: 'actual' });
+  const dailyStd = getDailyReferenceCost(rec, { dateKey: '2026-11-11', pricingMode: 'standard' });
+  assert.ok(dailyStd.costUSD > dailyAct.costUSD);
+  assert.ok(dailyAct.cacheSavedUSD > 0);
+  assert.equal(dailyAct.models[0].modelKey, 'gemini-4-argon');
+  assert.ok(dailyAct.models.some(m => m.modelKey === 'unattributed'), 'Residual unattributed tokens fall back cleanly');
+
+  const aggAct = calculateIntervalCost({ '2026-11-11': rec }, ['2026-11-11'], { pricingMode: 'actual' });
+  const aggStd = calculateIntervalCost({ '2026-11-11': rec }, ['2026-11-11'], { pricingMode: 'standard' });
+  assert.ok(aggStd.totalCostUSD > aggAct.totalCostUSD);
+  assert.equal(aggAct.models[0].shortLabel, 'Argon');
+
+  // 4) Multi-turn Current Session cost calculation
+  const sessCost = calculateSessionCost([
+    { absIdx: 0, rawModel: 'Gemini 4 Carbon (High)', input: 20000, cache: 80000, output: 1500, dateKey: '2026-11-11' },
+    { absIdx: 1, rawModel: 'Gemini 4 Carbon (High)', input: 15000, cache: 95000, output: 2500, dateKey: '2026-11-11' }
+  ], { pricingMode: 'actual' });
+  assert.equal(sessCost.turnsCount, 2);
+  assert.ok(sessCost.totalCostUSD > sessCost.lastTurnCostUSD);
+  assert.ok(sessCost.cacheSavedUSD > 0);
+  assert.equal(sessCost.models[0].shortLabel, 'Carbon');
+
+  // 5) collectTokenHistoryAsync ignores empty brain/<uuid> dirs without transcript.jsonl (no phantom dates)
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v29-test-'));
+  try {
+    const emptyUuidDir = path.join(tmpHome, '.gemini', 'antigravity', 'brain', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    fs.mkdirSync(emptyUuidDir, { recursive: true });
+    const activeLogDir = path.join(tmpHome, '.gemini', 'antigravity', 'brain', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '.system_generated', 'logs');
+    fs.mkdirSync(activeLogDir, { recursive: true });
+    fs.writeFileSync(path.join(activeLogDir, 'transcript.jsonl'), [
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-10T10:00:00Z',
+        usage: { input_tokens: 4000, cache_read_tokens: 16000, output_tokens: 1000 }
+      })
+    ].join('\n'), 'utf8');
+
+    const out = await collectTokenHistoryAsync({ homeDir: tmpHome, force: true });
+    assert.equal(out.firstTokenDate, '2026-11-10');
+    assert.deepEqual(Object.keys(out.dailyMap), ['2026-11-10']);
+    assert.equal(out.summary.grandTotalTokens, 21000);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 
 

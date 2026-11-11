@@ -1,3 +1,26 @@
+# Release Notes — v2.9.0
+
+## Antigravity Context & Token Viewer v2.9.0
+
+### Highlights
+1. **真实多模型 API 等值估算引擎（Multi-Model API Equivalent Valuation）**
+   - 对接本地会话 `GetCascadeTrajectoryGeneratorMetadata` 与 `GetUserStatus` 模型配置表，自动解析 `v2.31.0+` 内部模型占位符（`MODEL_PLACEHOLDER_M427/M437/M438` → `Gemini 4 Carbon`、`M417..M419` → `Gemini 4 Argon`、`M322` → `Gemini 3.1 Pro`、`M318..M320` → `Gemini 3.8 Flash`、`M400..M405` → `Claude Opus / Sonnet 5.5` 等），并与 `transcript.jsonl` 步级时间戳做一对一元组对齐。
+   - 内置官方多模型单价表（输入 / 缓存读取 / 输出）及 `>200K` 长上下文阶梯计价，默认采用 **发生日官方优惠实价（`actual`，含 Google 2026.11–12 限时特惠）**，支持一键切换 **标准零售原价（`standard`）** 对比。
+
+2. **全局 Token 面板四维 `$` 徽标与去边框「API 价值构成」微条 (`#h-cost-breakdown`)**
+   - 顶部 **全量累计 / 今日使用 / 本月使用 / 年度使用** 4 张核心卡片右上角直接展示对应周期的 `$ USD` API 等值估算。
+   - 区间汇总栏下方新增克制无框的 **API 价值构成条**：提供 `4px` 模型费用占比堆叠微条、主力模型金额与百分比图例、输入/输出/缓存成本拆分，以及 **Prompt Cache 缓存节省金额（`缓存省 $xxx`）** 高亮。
+
+3. **当前会话实时 API 等值 (`#session-cost-summary`) 与 5 视图热力图气泡模型归因**
+   - 会话上下文面板新增无框「本会话 API 等值」区块，基于已有请求轮询数据零额外开销计算 **会话累计等值、最近一轮费用、本会话缓存已省金额** 与轮次模型构成。
+   - 5 视图热力图（每天 / 每周 / 每月 / 今年 / 累计总量）悬浮气泡新增当期主力模型费用占比与缓存节省额明细。
+
+4. **归档持久化与跨版本热挂载稳定性加固**
+   - 升级 `token_usage_archive_v3.json` 原子写盘（Write-Rename）与 `model_attribution_cache_v1.json` 增量缓存，剔除无关大目录扫描（`TRANSCRIPT_SKIP_DIRS`），热读取稳定在 `~35ms`。
+   - 吸收历史同步重入补偿队列（`pendingHistoryForce`）、窗口标题栏主题同步去重（`lastSyncedOverlayKey`）与热升级跨进程模型归因保留逻辑。
+
+---
+
 # Release Notes — v2.8.0
 
 ## Antigravity Context & Token Viewer v2.8.0

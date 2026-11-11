@@ -10,15 +10,170 @@
     return Number.isFinite(num) && num >= 0 ? num : null;
   }
 
+  const PLACEHOLDER_MODEL_MAP = {
+    MODEL_PLACEHOLDER_M427: { family: 'gemini-4-carbon', label: 'Gemini 4 Carbon (High)' },
+    MODEL_PLACEHOLDER_M437: { family: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Medium)' },
+    MODEL_PLACEHOLDER_M438: { family: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Low)' },
+    MODEL_PLACEHOLDER_M417: { family: 'gemini-4-argon', label: 'Gemini 4 Argon (High)' },
+    MODEL_PLACEHOLDER_M418: { family: 'gemini-4-argon', label: 'Gemini 4 Argon (Medium)' },
+    MODEL_PLACEHOLDER_M419: { family: 'gemini-4-argon', label: 'Gemini 4 Argon (Low)' },
+    MODEL_PLACEHOLDER_M318: { family: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (High)' },
+    MODEL_PLACEHOLDER_M319: { family: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (Medium)' },
+    MODEL_PLACEHOLDER_M320: { family: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (Low)' },
+    MODEL_PLACEHOLDER_M322: { family: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+    MODEL_PLACEHOLDER_M298: { family: 'gemini-3.8-flash', label: 'Gemini Flash' },
+    MODEL_PLACEHOLDER_M47: { family: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    MODEL_PLACEHOLDER_M400: { family: 'claude-opus-5-5', label: 'Claude Opus 5.5 (Low)' },
+    MODEL_PLACEHOLDER_M401: { family: 'claude-opus-5-5', label: 'Claude Opus 5.5 (Medium)' },
+    MODEL_PLACEHOLDER_M402: { family: 'claude-opus-5-5', label: 'Claude Opus 5.5 (High)' },
+    MODEL_PLACEHOLDER_M403: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (Low)' },
+    MODEL_PLACEHOLDER_M404: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (Medium)' },
+    MODEL_PLACEHOLDER_M405: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (High)' },
+    MODEL_OPENAI_GPT_OSS_120B_MEDIUM: { family: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)' }
+  };
+
+  // 官方公开 Developer API 费率目录（USD / 百万 Token；核对日期：2026-11）
+  const API_PRICING_CATALOG = {
+    'gemini-4-argon': {
+      label: 'Gemini 4 Argon',
+      shortLabel: 'Argon',
+      color: '#d97757',
+      promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
+      standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'gemini-4-carbon': {
+      label: 'Gemini 4 Carbon',
+      shortLabel: 'Carbon',
+      color: '#e09f5a',
+      promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
+      standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'gemini-3.8-flash': {
+      label: 'Gemini 3.8 Flash',
+      shortLabel: '3.8 Flash',
+      color: '#34d399',
+      promo: { effectiveTo: '2026-12-31', input: 0.75, cacheRead: 0.075, output: 3.75 },
+      standard: { input: 1.50, cacheRead: 0.15, output: 7.50 }
+    },
+    'gemini-3.1-pro': {
+      label: 'Gemini 3.1 Pro',
+      shortLabel: '3.1 Pro',
+      color: '#60a5fa',
+      standard: { input: 2.00, cacheRead: 0.20, output: 12.00 },
+      longContext: { minPromptTokens: 200001, input: 4.00, cacheRead: 0.40, output: 18.00 }
+    },
+    'gemini-2.5-pro': {
+      label: 'Gemini 2.5 Pro',
+      shortLabel: '2.5 Pro',
+      color: '#818cf8',
+      standard: { input: 1.25, cacheRead: 0.125, output: 10.00 },
+      longContext: { minPromptTokens: 200001, input: 2.50, cacheRead: 0.25, output: 15.00 }
+    },
+    'gemini-3.5-flash-lite': {
+      label: 'Gemini 3.5 Flash-Lite',
+      shortLabel: 'Flash-Lite',
+      color: '#6ee7b7',
+      standard: { input: 0.30, cacheRead: 0.03, output: 2.50 }
+    },
+    'claude-opus-5-5': {
+      label: 'Claude Opus 5.5',
+      shortLabel: 'Opus 5.5',
+      color: '#a78bfa',
+      standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'claude-opus-4-6': {
+      label: 'Claude Opus 4.6',
+      shortLabel: 'Opus 4.6',
+      color: '#a78bfa',
+      standard: { input: 5.00, cacheRead: 0.50, output: 25.00 }
+    },
+    'claude-sonnet-5-5': {
+      label: 'Claude Sonnet 5.5',
+      shortLabel: 'Sonnet 5.5',
+      color: '#c084fc',
+      standard: { input: 2.00, cacheRead: 0.10, output: 10.00 }
+    },
+    'claude-sonnet-4-6': {
+      label: 'Claude Sonnet 4.6',
+      shortLabel: 'Sonnet 4.6',
+      color: '#c084fc',
+      standard: { input: 3.00, cacheRead: 0.30, output: 15.00 }
+    },
+    'gpt-oss-120b': {
+      label: 'GPT-OSS 120B',
+      shortLabel: 'GPT-OSS',
+      color: '#94a3b8',
+      standard: { input: 0.15, cacheRead: 0.04, output: 0.60 }
+    },
+    unattributed: {
+      label: '参考基准',
+      shortLabel: '参考基准',
+      color: '#71717a',
+      promo: { effectiveTo: '2026-12-31', input: 0.75, cacheRead: 0.075, output: 3.75 },
+      standard: { input: 1.50, cacheRead: 0.15, output: 7.50 }
+    }
+  };
+
+  function resolveModelDisplayLabel(rawModel, cascadeModelConfigs) {
+    if (!rawModel) return '';
+    const trimmed = String(rawModel).trim();
+    if (!trimmed) return '';
+    if (Array.isArray(cascadeModelConfigs) && cascadeModelConfigs.length) {
+      const upper = trimmed.toUpperCase();
+      const lower = trimmed.toLowerCase();
+      const matched = cascadeModelConfigs.find(c => {
+        const mId = String(c?.modelId || c?.modelOrAlias?.model || '').trim();
+        const alias = String(c?.modelOrAlias?.alias || '').trim();
+        const lbl = String(c?.label || '').trim();
+        return (mId && mId.toUpperCase() === upper) || (alias && alias.toLowerCase() === lower) || (lbl && lbl.toLowerCase() === lower);
+      });
+      if (matched?.label) return String(matched.label);
+    }
+    const ph = PLACEHOLDER_MODEL_MAP[trimmed.toUpperCase()];
+    if (ph) return ph.label;
+    return trimmed;
+  }
+
+  function normalizeModelFamily(rawModel, cascadeModelConfigs) {
+    if (!rawModel) return null;
+    const trimmed = String(rawModel).trim();
+    if (!trimmed) return null;
+    if (Object.prototype.hasOwnProperty.call(API_PRICING_CATALOG, trimmed)) return trimmed;
+
+    const resolved = resolveModelDisplayLabel(trimmed, cascadeModelConfigs);
+    const s = `${resolved} ${trimmed}`.toLowerCase();
+
+    const ph = PLACEHOLDER_MODEL_MAP[trimmed.toUpperCase()];
+    if (ph && !s.includes('carbon') && !s.includes('argon') && !s.includes('opus') && !s.includes('sonnet') && !s.includes('flash')) {
+      return ph.family;
+    }
+
+    if (s.includes('carbon') || s.includes('gemini-4-carbon')) return 'gemini-4-carbon';
+    if (s.includes('argon') || s.includes('gemini-4-argon')) return 'gemini-4-argon';
+    if (s.includes('flash-lite') || s.includes('3.5-flash-lite') || s.includes('3.5 flash-lite')) return 'gemini-3.5-flash-lite';
+    if (s.includes('flash') || s.includes('gemini-3.8-flash') || s.includes('gemini-3-flash')) return 'gemini-3.8-flash';
+    if (s.includes('3.1-pro') || s.includes('3.1 pro')) return 'gemini-3.1-pro';
+    if (s.includes('2.5-pro') || s.includes('2.5 pro')) return 'gemini-2.5-pro';
+    if (s.includes('opus')) {
+      if (s.includes('4.6') || s.includes('4-6') || s.includes('4.5') || s.includes('4-5')) return 'claude-opus-4-6';
+      return 'claude-opus-5-5';
+    }
+    if (s.includes('sonnet')) {
+      if (s.includes('4.6') || s.includes('4-6') || s.includes('4.5') || s.includes('4-5')) return 'claude-sonnet-4-6';
+      return 'claude-sonnet-5-5';
+    }
+    if (s.includes('gpt-oss')) return 'gpt-oss-120b';
+    if (ph) return ph.family;
+    return null;
+  }
+
   function getModelPoolKey(raw) {
     if (!raw) return 'unknown';
-    const s = String(raw).toLowerCase();
-    if (s.includes('argon') || s.includes('gemini-4-argon')) return 'gemini-4-argon';
-    if (s.includes('flash') || s.includes('gemini-3.8-flash')) return 'gemini-3.8-flash';
-    if (s.includes('opus') || s.includes('claude-opus')) return 'claude-opus-5-5';
-    if (s.includes('sonnet') || s.includes('claude-sonnet')) return 'claude-sonnet-5-5';
-    if (s.includes('gpt-oss')) return 'gpt-oss-120b';
-    return s.replace(/[^a-z0-9_-]/g, '');
+    const fam = normalizeModelFamily(raw);
+    if (fam === 'claude-opus-4-6') return 'claude-opus-5-5';
+    if (fam === 'claude-sonnet-4-6') return 'claude-sonnet-5-5';
+    if (fam) return fam;
+    return String(raw).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'unknown';
   }
 
   function formatResetTimeZh(isoStr) {
@@ -44,14 +199,14 @@
     const targetStr = String(modelIdOrName).toLowerCase();
 
     let matched = cascadeModelConfigs.find(c => {
-      const mId = String(c.modelId || '').toLowerCase();
+      const mId = String(c.modelId || c.modelOrAlias?.model || '').toLowerCase();
       const lbl = String(c.label || '').toLowerCase();
       return mId === targetStr || lbl === targetStr;
     });
 
     if (!matched && poolKey !== 'unknown') {
       matched = cascadeModelConfigs.find(c => {
-        const cPool = getModelPoolKey(c.modelId || c.label);
+        const cPool = getModelPoolKey(c.modelId || c.modelOrAlias?.model || c.label);
         return cPool === poolKey;
       });
     }
@@ -60,6 +215,7 @@
 
     const qi = matched.quotaInfo || {};
     const poolNames = {
+      'gemini-4-carbon': 'Gemini 4 Carbon 配额池（周限额）',
       'gemini-4-argon': 'Gemini 4 Argon 配额池（周限额）',
       'gemini-3.8-flash': 'Gemini 3.8 Flash 配额池',
       'claude-opus-5-5': 'Claude Opus 5.5 配额池',
@@ -68,7 +224,7 @@
     };
 
     return {
-      modelId: matched.modelId || '',
+      modelId: matched.modelId || matched.modelOrAlias?.model || '',
       label: matched.label || modelIdOrName,
       poolKey,
       poolName: poolNames[poolKey] || (matched.label ? `${matched.label} 配额池` : '专属模型配额池'),
@@ -273,7 +429,8 @@
     if (!m) return null;
     const lastRetry = (m.retryInfos || []).at(-1);
     const error = String(lastRetry?.error || m.error || '');
-    const model = m.modelDisplayName || m.responseModel || m.model || options.currentModel || '';
+    const rawModelStr = m.modelDisplayName || m.responseModel || m.usage?.responseModel || m.usage?.model || m.model || options.currentModel || '';
+    const model = resolveModelDisplayLabel(rawModelStr, options.cascadeModelConfigs);
 
     const classification = error ? classifyRequestError(error, {
       currentModel: model,
@@ -379,40 +536,305 @@
     return 4;
   }
 
-  // API 等值参考成本估算（默认以 Gemini 3.8 Flash / Pro 综合混合基准：Prompt $0.75/M, Cache Read $0.075/M, Output $3.75/M）
-  function getDailyReferenceCost(rec) {
+  function getLocalTodayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function getModelRates(modelOrKey, options = {}) {
+    const pricingMode = options.pricingMode === 'standard' ? 'standard' : 'actual';
+    const dateKey = (options.dateKey && /^\d{4}-\d{2}-\d{2}$/.test(String(options.dateKey)))
+      ? String(options.dateKey)
+      : getLocalTodayKey();
+    const normKey = normalizeModelFamily(modelOrKey, options.cascadeModelConfigs) || 'unattributed';
+    const spec = API_PRICING_CATALOG[normKey] || API_PRICING_CATALOG.unattributed;
+
+    let tier = spec.standard;
+    let isPromoActive = false;
+    if (pricingMode === 'actual' && spec.promo && dateKey <= spec.promo.effectiveTo) {
+      tier = spec.promo;
+      isPromoActive = true;
+    } else if (spec.longContext && Number(options.promptTokens) >= spec.longContext.minPromptTokens) {
+      tier = spec.longContext;
+    }
+
+    return {
+      modelKey: normKey,
+      label: spec.label,
+      shortLabel: spec.shortLabel,
+      color: spec.color,
+      input: tier.input,
+      cacheRead: tier.cacheRead,
+      output: tier.output,
+      isPromoActive,
+      pricingMode
+    };
+  }
+
+  function computeBucketRawCost(inp, cac, out, tot, rates) {
+    if (inp + cac + out > 0) {
+      const inputCost = (inp / 1e6) * rates.input;
+      const cacheCost = (cac / 1e6) * rates.cacheRead;
+      const outputCost = (out / 1e6) * rates.output;
+      const cacheSaved = Math.max(0, (cac / 1e6) * (rates.input - rates.cacheRead));
+      return {
+        costUSD: inputCost + cacheCost + outputCost,
+        inputCostUSD: inputCost,
+        cacheCostUSD: cacheCost,
+        outputCostUSD: outputCost,
+        cacheSavedUSD: cacheSaved
+      };
+    }
+    if (tot > 0) {
+      const blendedPerM = rates.input * 0.12 + rates.cacheRead * 0.85 + rates.output * 0.03;
+      const fallbackCost = (tot / 1e6) * blendedPerM;
+      return {
+        costUSD: fallbackCost,
+        inputCostUSD: fallbackCost * 0.4,
+        cacheCostUSD: fallbackCost * 0.4,
+        outputCostUSD: fallbackCost * 0.2,
+        cacheSavedUSD: 0
+      };
+    }
+    return { costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0 };
+  }
+
+  function calculateTurnCost(turn, options = {}) {
+    if (!turn || typeof turn !== 'object') {
+      return {
+        modelKey: 'unattributed', label: '参考基准', shortLabel: '参考基准', color: '#71717a',
+        costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0,
+        input: 0, cache: 0, output: 0, total: 0
+      };
+    }
+    const inp = Math.max(0, Number(turn.input ?? turn.inputTokens) || 0);
+    const cac = Math.max(0, Number(turn.cache ?? turn.cacheReadTokens) || 0);
+    const out = Math.max(0, Number(turn.output ?? turn.outputTokens) || 0);
+    const tot = inp + cac + out;
+    const rawModel = turn.rawModel || turn.model || turn.modelKey || '';
+    const rates = getModelRates(rawModel, {
+      pricingMode: options.pricingMode,
+      dateKey: turn.dateKey || options.dateKey,
+      promptTokens: inp + cac,
+      cascadeModelConfigs: options.cascadeModelConfigs
+    });
+    const c = computeBucketRawCost(inp, cac, out, tot, rates);
+    return {
+      modelKey: rates.modelKey,
+      label: rates.label,
+      shortLabel: rates.shortLabel,
+      color: rates.color,
+      input: inp,
+      cache: cac,
+      output: out,
+      total: tot,
+      costUSD: Number(c.costUSD.toFixed(6)),
+      inputCostUSD: Number(c.inputCostUSD.toFixed(6)),
+      cacheCostUSD: Number(c.cacheCostUSD.toFixed(6)),
+      outputCostUSD: Number(c.outputCostUSD.toFixed(6)),
+      cacheSavedUSD: Number(c.cacheSavedUSD.toFixed(6))
+    };
+  }
+
+  function calculateSessionCost(turns = [], options = {}) {
+    if (!Array.isArray(turns) || !turns.length) {
+      return {
+        turnsCount: 0,
+        totalTokens: 0,
+        totalCostUSD: 0,
+        lastTurnCostUSD: 0,
+        lastTurnModelShort: '',
+        inputCostUSD: 0,
+        cacheCostUSD: 0,
+        outputCostUSD: 0,
+        cacheSavedUSD: 0,
+        models: []
+      };
+    }
+    let totalTokens = 0, totalCost = 0, inputCost = 0, cacheCost = 0, outputCost = 0, cacheSaved = 0;
+    let lastTurnCost = 0, lastTurnModelShort = '';
+    let maxIdx = -Infinity;
+    const byModel = new Map();
+
+    for (let i = 0; i < turns.length; i++) {
+      const t = turns[i];
+      const tc = calculateTurnCost(t, options);
+      if (tc.total <= 0) continue;
+      totalTokens += tc.total;
+      totalCost += tc.costUSD;
+      inputCost += tc.inputCostUSD;
+      cacheCost += tc.cacheCostUSD;
+      outputCost += tc.outputCostUSD;
+      cacheSaved += tc.cacheSavedUSD;
+
+      const ord = Number.isFinite(Number(t.absIdx)) ? Number(t.absIdx) : i;
+      if (ord >= maxIdx) {
+        maxIdx = ord;
+        lastTurnCost = tc.costUSD;
+        lastTurnModelShort = tc.shortLabel;
+      }
+
+      let bucket = byModel.get(tc.modelKey);
+      if (!bucket) {
+        bucket = {
+          modelKey: tc.modelKey,
+          label: tc.label,
+          shortLabel: tc.shortLabel,
+          color: tc.color,
+          tokens: 0,
+          turns: 0,
+          costUSD: 0,
+          cacheSavedUSD: 0
+        };
+        byModel.set(tc.modelKey, bucket);
+      }
+      bucket.tokens += tc.total;
+      bucket.turns += 1;
+      bucket.costUSD += tc.costUSD;
+      bucket.cacheSavedUSD += tc.cacheSavedUSD;
+    }
+
+    const models = Array.from(byModel.values())
+      .sort((a, b) => b.costUSD - a.costUSD || b.tokens - a.tokens)
+      .map(m => ({
+        ...m,
+        costUSD: Number(m.costUSD.toFixed(4)),
+        cacheSavedUSD: Number(m.cacheSavedUSD.toFixed(4)),
+        sharePct: totalCost > 0 ? Math.round((m.costUSD / totalCost) * 100) : (totalTokens > 0 ? Math.round((m.tokens / totalTokens) * 100) : 0)
+      }));
+
+    return {
+      turnsCount: turns.length,
+      totalTokens,
+      totalCostUSD: Number(totalCost.toFixed(4)),
+      lastTurnCostUSD: Number(lastTurnCost.toFixed(6)),
+      lastTurnModelShort,
+      inputCostUSD: Number(inputCost.toFixed(4)),
+      cacheCostUSD: Number(cacheCost.toFixed(4)),
+      outputCostUSD: Number(outputCost.toFixed(4)),
+      cacheSavedUSD: Number(cacheSaved.toFixed(4)),
+      models
+    };
+  }
+
+  // API 等值成本估算（优先使用 rec.models 真实按模型分项归因；未归因残差按参考基准折算）
+  function getDailyReferenceCost(rec, options = {}) {
     if (!rec || typeof rec !== 'object') {
-      return { costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0 };
+      return {
+        costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0,
+        attributedTokens: 0, attributedRatio: 0, models: []
+      };
     }
     const inp = Math.max(0, Number(rec.input) || 0);
     const cac = Math.max(0, Number(rec.cache) || 0);
     const out = Math.max(0, Number(rec.output) || 0);
     const tot = Math.max(0, Number(rec.total) || (inp + cac + out));
-    if (tot <= 0) return { costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0 };
-
-    const inputRate = 0.75 / 1e6;
-    const cacheRate = 0.075 / 1e6;
-    const outputRate = 3.75 / 1e6;
-
-    if (inp + cac + out > 0) {
-      const inputCostUSD = inp * inputRate;
-      const cacheCostUSD = cac * cacheRate;
-      const outputCostUSD = out * outputRate;
-      const costUSD = inputCostUSD + cacheCostUSD + outputCostUSD;
+    if (tot <= 0) {
       return {
-        costUSD: Number(costUSD.toFixed(4)),
-        inputCostUSD: Number(inputCostUSD.toFixed(4)),
-        cacheCostUSD: Number(cacheCostUSD.toFixed(4)),
-        outputCostUSD: Number(outputCostUSD.toFixed(4))
+        costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0,
+        attributedTokens: 0, attributedRatio: 0, models: []
       };
     }
-    // 兜底：若某历史记录仅有 total
-    const fallbackCost = tot * (0.18 / 1e6);
+
+    const pricingMode = options.pricingMode === 'standard' ? 'standard' : 'actual';
+    const dateKey = options.dateKey || rec.dateKey || '2026-11-11';
+    const rawModels = (rec.models && typeof rec.models === 'object') ? rec.models : null;
+
+    let costUSD = 0, inputCostUSD = 0, cacheCostUSD = 0, outputCostUSD = 0, cacheSavedUSD = 0;
+    let attrInp = 0, attrCac = 0, attrOut = 0, attrTot = 0;
+    const modelMap = new Map();
+
+    const addModelEntry = (mKey, mInp, mCac, mOut, mTot) => {
+      const rates = getModelRates(mKey, { pricingMode, dateKey, cascadeModelConfigs: options.cascadeModelConfigs });
+      const c = computeBucketRawCost(mInp, mCac, mOut, mTot, rates);
+      costUSD += c.costUSD;
+      inputCostUSD += c.inputCostUSD;
+      cacheCostUSD += c.cacheCostUSD;
+      outputCostUSD += c.outputCostUSD;
+      cacheSavedUSD += c.cacheSavedUSD;
+
+      let prev = modelMap.get(rates.modelKey);
+      if (!prev) {
+        prev = {
+          modelKey: rates.modelKey,
+          label: rates.label,
+          shortLabel: rates.shortLabel,
+          color: rates.color,
+          input: 0, cache: 0, output: 0, tokens: 0,
+          costUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0
+        };
+        modelMap.set(rates.modelKey, prev);
+      }
+      prev.input += mInp;
+      prev.cache += mCac;
+      prev.output += mOut;
+      prev.tokens += mTot;
+      prev.costUSD += c.costUSD;
+      prev.inputCostUSD += c.inputCostUSD;
+      prev.cacheCostUSD += c.cacheCostUSD;
+      prev.outputCostUSD += c.outputCostUSD;
+      prev.cacheSavedUSD += c.cacheSavedUSD;
+    };
+
+    if (rawModels) {
+      for (const [mKey, mRec] of Object.entries(rawModels)) {
+        if (!mRec || typeof mRec !== 'object') continue;
+        const mInp = Math.max(0, Number(mRec.input) || 0);
+        const mCac = Math.max(0, Number(mRec.cache) || 0);
+        const mOut = Math.max(0, Number(mRec.output) || 0);
+        const mTot = Math.max(0, Number(mRec.total) || (mInp + mCac + mOut));
+        if (mTot <= 0) continue;
+        const norm = normalizeModelFamily(mKey, options.cascadeModelConfigs) || 'unattributed';
+        if (norm !== 'unattributed') {
+          attrInp += mInp;
+          attrCac += mCac;
+          attrOut += mOut;
+          attrTot += mTot;
+        }
+        addModelEntry(norm, mInp, mCac, mOut, mTot);
+      }
+    }
+
+    const usedInp = Array.from(modelMap.values()).reduce((s, x) => s + x.input, 0);
+    const usedCac = Array.from(modelMap.values()).reduce((s, x) => s + x.cache, 0);
+    const usedOut = Array.from(modelMap.values()).reduce((s, x) => s + x.output, 0);
+    const usedTot = Array.from(modelMap.values()).reduce((s, x) => s + x.tokens, 0);
+
+    if (tot > usedTot) {
+      const remInp = Math.max(0, inp - usedInp);
+      const remCac = Math.max(0, cac - usedCac);
+      const remOut = Math.max(0, out - usedOut);
+      const remTot = Math.max(tot - usedTot, remInp + remCac + remOut);
+      addModelEntry('unattributed', remInp, remCac, remOut, remTot);
+    }
+
+    const models = Array.from(modelMap.values())
+      .sort((a, b) => b.costUSD - a.costUSD || b.tokens - a.tokens)
+      .map(m => ({
+        ...m,
+        costUSD: Number(m.costUSD.toFixed(4)),
+        inputCostUSD: Number(m.inputCostUSD.toFixed(4)),
+        cacheCostUSD: Number(m.cacheCostUSD.toFixed(4)),
+        outputCostUSD: Number(m.outputCostUSD.toFixed(4)),
+        cacheSavedUSD: Number(m.cacheSavedUSD.toFixed(4)),
+        sharePct: costUSD > 0 ? Math.round((m.costUSD / costUSD) * 100) : (tot > 0 ? Math.round((m.tokens / tot) * 100) : 0),
+        tokenSharePct: tot > 0 ? Math.round((m.tokens / tot) * 100) : 0
+      }));
+
     return {
-      costUSD: Number(fallbackCost.toFixed(4)),
-      inputCostUSD: Number((fallbackCost * 0.4).toFixed(4)),
-      cacheCostUSD: Number((fallbackCost * 0.4).toFixed(4)),
-      outputCostUSD: Number((fallbackCost * 0.2).toFixed(4))
+      costUSD: Number(costUSD.toFixed(4)),
+      inputCostUSD: Number(inputCostUSD.toFixed(4)),
+      cacheCostUSD: Number(cacheCostUSD.toFixed(4)),
+      outputCostUSD: Number(outputCostUSD.toFixed(4)),
+      cacheSavedUSD: Number(cacheSavedUSD.toFixed(4)),
+      attributedTokens: Math.min(tot, attrTot),
+      attributedRatio: tot > 0 ? Number(((Math.min(tot, attrTot) / tot) * 100).toFixed(1)) : 0,
+      models,
+      rawCostUSD: costUSD,
+      rawInputCostUSD: inputCostUSD,
+      rawCacheCostUSD: cacheCostUSD,
+      rawOutputCostUSD: outputCostUSD,
+      rawCacheSavedUSD: cacheSavedUSD
     };
   }
 
@@ -420,14 +842,21 @@
     const map = (dailyMap && typeof dailyMap === 'object') ? dailyMap : {};
     const keys = Array.isArray(dateKeys) ? dateKeys : Object.keys(map);
     const todayStr = options.todayStr || '';
+    const pricingMode = options.pricingMode === 'standard' ? 'standard' : 'actual';
 
     let totalTokens = 0;
     let inputTokens = 0;
     let cacheTokens = 0;
     let outputTokens = 0;
+    let attributedTokens = 0;
     let totalCostUSD = 0;
+    let inputCostUSD = 0;
+    let cacheCostUSD = 0;
+    let outputCostUSD = 0;
+    let cacheSavedUSD = 0;
     let pastDays = 0;
     let activeDays = 0;
+    const modelAgg = new Map();
 
     for (const key of keys) {
       if (todayStr && key > todayStr) continue;
@@ -439,8 +868,42 @@
         inputTokens += Number(rec.input) || 0;
         cacheTokens += Number(rec.cache) || 0;
         outputTokens += Number(rec.output) || 0;
-        const c = getDailyReferenceCost(rec);
-        totalCostUSD += c.costUSD;
+        const c = getDailyReferenceCost(rec, {
+          dateKey: key,
+          pricingMode,
+          cascadeModelConfigs: options.cascadeModelConfigs
+        });
+        totalCostUSD += c.rawCostUSD ?? c.costUSD;
+        inputCostUSD += c.rawInputCostUSD ?? c.inputCostUSD;
+        cacheCostUSD += c.rawCacheCostUSD ?? c.cacheCostUSD;
+        outputCostUSD += c.rawOutputCostUSD ?? c.outputCostUSD;
+        cacheSavedUSD += c.rawCacheSavedUSD ?? c.cacheSavedUSD;
+        attributedTokens += c.attributedTokens || 0;
+
+        for (const m of (c.models || [])) {
+          let agg = modelAgg.get(m.modelKey);
+          if (!agg) {
+            agg = {
+              modelKey: m.modelKey,
+              label: m.label,
+              shortLabel: m.shortLabel,
+              color: m.color,
+              tokens: 0,
+              input: 0,
+              cache: 0,
+              output: 0,
+              costUSD: 0,
+              cacheSavedUSD: 0
+            };
+            modelAgg.set(m.modelKey, agg);
+          }
+          agg.tokens += m.tokens;
+          agg.input += m.input;
+          agg.cache += m.cache;
+          agg.output += m.output;
+          agg.costUSD += m.costUSD;
+          agg.cacheSavedUSD += m.cacheSavedUSD;
+        }
       }
     }
 
@@ -451,6 +914,16 @@
     const activeDailyAverageUSD = activeDays > 0 ? Number((totalCostUSD / activeDays).toFixed(4)) : 0;
     const activeDailyAverageTokens = activeDays > 0 ? Math.round(totalTokens / activeDays) : 0;
 
+    const models = Array.from(modelAgg.values())
+      .sort((a, b) => b.costUSD - a.costUSD || b.tokens - a.tokens)
+      .map(m => ({
+        ...m,
+        costUSD: Number(m.costUSD.toFixed(4)),
+        cacheSavedUSD: Number(m.cacheSavedUSD.toFixed(4)),
+        sharePct: totalCostUSD > 0 ? Math.round((m.costUSD / totalCostUSD) * 100) : (totalTokens > 0 ? Math.round((m.tokens / totalTokens) * 100) : 0),
+        tokenSharePct: totalTokens > 0 ? Math.round((m.tokens / totalTokens) * 100) : 0
+      }));
+
     return {
       totalTokens,
       inputTokens,
@@ -458,7 +931,15 @@
       outputTokens,
       netTokens,
       cacheRatio,
+      attributedTokens,
+      attributedRatio: totalTokens > 0 ? Number(((attributedTokens / totalTokens) * 100).toFixed(1)) : 0,
       totalCostUSD: Number(totalCostUSD.toFixed(4)),
+      inputCostUSD: Number(inputCostUSD.toFixed(4)),
+      cacheCostUSD: Number(cacheCostUSD.toFixed(4)),
+      outputCostUSD: Number(outputCostUSD.toFixed(4)),
+      cacheSavedUSD: Number(cacheSavedUSD.toFixed(4)),
+      models,
+      pricingMode,
       pastDays,
       activeDays,
       dailyAverageUSD,
@@ -541,6 +1022,13 @@
     return { groups, total, media: [...media.values()], steps: steps.length, userMessages, assistantMessages, currentError };
   }
   const api = {
+    API_PRICING_CATALOG,
+    PLACEHOLDER_MODEL_MAP,
+    normalizeModelFamily,
+    resolveModelDisplayLabel,
+    getModelRates,
+    calculateTurnCost,
+    calculateSessionCost,
     summarize,
     classifyRequestError,
     resolveModelQuota,

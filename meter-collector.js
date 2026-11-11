@@ -5,7 +5,7 @@ const path = require('path');
 const https = require('https');
 const { fileURLToPath } = require('url');
 const { spawn, spawnSync } = require('child_process');
-const { analyzeSteps, summarize, add, empty, measure } = require('./meter-core');
+const { analyzeSteps, summarize, add, empty, measure, normalizeModelFamily } = require('./meter-core');
 
 let cachedPython = undefined;
 function resolvePython() {
@@ -211,7 +211,7 @@ async function collect(origin, id, options = {}) {
     const count = Number(full.numTotalGeneratorMetadata ?? trajectory.generatorMetadata?.length ?? 0);
     const tail = await call('GetCascadeTrajectoryGeneratorMetadata', { cascadeId: id, generatorMetadataOffset: Math.max(0, count - 3), includeMessages: false });
     let latestModel = null;
-    for (const m of (tail.generatorMetadata || []).slice().reverse()) { latest = summarize(m); if (latest) { latestModel = m.chatModel; break; } }
+    for (const m of (tail.generatorMetadata || []).slice().reverse()) { latest = summarize(m, { cascadeModelConfigs: cachedHostMeta.cascadeModelConfigs }); if (latest) { latestModel = m.chatModel; break; } }
     const system = latestModel ? measure((latestModel.promptSections || []).map(p => p.content || '').join('\n') || latestModel.systemPrompt || '') : empty();
     const definitions = latestModel ? measure(JSON.stringify(latestModel.tools || [])) : empty();
     session.groups.system = system; session.groups.definitions = definitions;
@@ -232,7 +232,42 @@ async function collect(origin, id, options = {}) {
 let cachedTokenHistory = null;
 let cachedTokenHistoryAt = 0;
 let cachedTokenHistoryHome = '';
+let cachedTokenHistoryHasModels = false;
+let activeHistoryAsyncPromise = null;
 const transcriptFileCache = new Map();
+const lastArchiveSigByPath = new Map();
+const TRANSCRIPT_SKIP_DIRS = new Set(['steps', 'scratch', 'media', 'artifacts', 'node_modules', '.git', '__pycache__']);
+
+let cachedHostMeta = { origin: '', at: 0, csrfToken: '', userTier: null, cascadeModelConfigs: [] };
+
+function atomicWriteJsonSync(filePath, payload, sigPayload) {
+  try {
+    const sigStr = sigPayload !== undefined ? JSON.stringify(sigPayload) : JSON.stringify(payload);
+    if (lastArchiveSigByPath.get(filePath) === sigStr && fs.existsSync(filePath)) {
+      return true;
+    }
+    const dir = path.dirname(filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const text = JSON.stringify(payload, null, 2);
+    JSON.parse(text);
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmpPath, text, 'utf8');
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch {
+      fs.copyFileSync(tmpPath, filePath);
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+    lastArchiveSigByPath.set(filePath, sigStr);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCompanionTempFile(name) {
+  return !name || name.endsWith('-wal') || name.endsWith('-shm') || name.endsWith('-journal') || name.includes('.tmp');
+}
 
 function formatLocalDateKey(dateObj) {
   const y = dateObj.getFullYear();
@@ -277,20 +312,204 @@ function parsePlannerStepLine(line) {
   }
 }
 
-function collectTokenHistory(options = {}) {
-  const home = options.homeDir || process.env.USERPROFILE || os.homedir();
-  if (!options.force && cachedTokenHistory && cachedTokenHistoryHome === home && Date.now() - cachedTokenHistoryAt < 15000) {
-    return cachedTokenHistory;
+function extractLineStepDate(line) {
+  if (!line || line.length < 20 || (!line.includes('"created_at"') && !line.includes('"createdAt"'))) return null;
+  try {
+    const idxMatch = line.match(/"step_index"\s*:\s*(\d+)/) || line.match(/"stepIndex"\s*:\s*(\d+)/);
+    const dateMatch = line.match(/"created(?:_at|At)"\s*:\s*"([^"]+)"/);
+    if (!dateMatch) return null;
+    const d = new Date(dateMatch[1]);
+    if (Number.isNaN(d.getTime())) return null;
+    return {
+      stepIndex: idxMatch ? Number(idxMatch[1]) : null,
+      dateKey: formatLocalDateKey(d)
+    };
+  } catch {
+    return null;
   }
+}
+
+function resolveStepDateKey(stepIndices, startStepIndex, stepDatePairs, fallbackDateKey) {
+  if (Array.isArray(stepDatePairs) && stepDatePairs.length > 0) {
+    const candidates = [];
+    if (Array.isArray(stepIndices)) {
+      for (const s of stepIndices) {
+        if (Number.isFinite(Number(s))) candidates.push(Number(s));
+      }
+    }
+    if (Number.isFinite(Number(startStepIndex))) candidates.push(Number(startStepIndex));
+    if (candidates.length > 0) {
+      for (const target of candidates) {
+        for (let i = 0; i < stepDatePairs.length; i++) {
+          if (stepDatePairs[i][0] === target) return stepDatePairs[i][1];
+        }
+      }
+      const maxTarget = Math.max(...candidates);
+      let bestDate = stepDatePairs[0][1];
+      for (let i = 0; i < stepDatePairs.length; i++) {
+        if (stepDatePairs[i][0] <= maxTarget + 1) bestDate = stepDatePairs[i][1];
+        else break;
+      }
+      return bestDate;
+    }
+    return stepDatePairs[stepDatePairs.length - 1][1];
+  }
+  return fallbackDateKey;
+}
+
+const MODEL_ATTR_SCHEMA_VERSION = 2;
+
+function matchPlannerStepsDates(usageTuples, plannerSteps, stepDates, fallbackDateKey) {
+  const results = new Array(usageTuples.length);
+  const pLen = Array.isArray(plannerSteps) ? plannerSteps.length : 0;
+  if (pLen === 0) {
+    for (let i = 0; i < usageTuples.length; i++) {
+      const u = usageTuples[i];
+      results[i] = resolveStepDateKey(u.stepIndices, u.startStepIndex, stepDates, fallbackDateKey);
+    }
+    return results;
+  }
+
+  const consumed = new Uint8Array(pLen);
+  let cursor = 0;
+  for (let i = 0; i < usageTuples.length; i++) {
+    const { inp, cac, out } = usageTuples[i];
+    let matchedIdx = -1;
+    const nearEnd = Math.min(pLen, cursor + 16);
+    for (let j = cursor; j < nearEnd; j++) {
+      if (!consumed[j] && plannerSteps[j][0] === inp && plannerSteps[j][1] === cac && plannerSteps[j][2] === out) {
+        matchedIdx = j;
+        break;
+      }
+    }
+    if (matchedIdx < 0) {
+      const backStart = Math.max(0, cursor - 4);
+      for (let j = backStart; j < pLen; j++) {
+        if (!consumed[j] && plannerSteps[j][0] === inp && plannerSteps[j][1] === cac && plannerSteps[j][2] === out) {
+          matchedIdx = j;
+          break;
+        }
+      }
+    }
+    if (matchedIdx >= 0) {
+      consumed[matchedIdx] = 1;
+      if (matchedIdx >= cursor) cursor = matchedIdx + 1;
+      results[i] = plannerSteps[matchedIdx][3];
+    } else {
+      const approxIdx = Math.min(pLen - 1, Math.max(cursor, Math.floor((i / Math.max(1, usageTuples.length)) * pLen)));
+      results[i] = plannerSteps[Math.min(pLen - 1, approxIdx)][3] || fallbackDateKey;
+    }
+  }
+  return results;
+}
+
+function loadModelAttributionDiskCache(attrPath) {
+  try {
+    if (!fs.existsSync(attrPath)) {
+      return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+    }
+    const raw = JSON.parse(fs.readFileSync(attrPath, 'utf8'));
+    if (!raw || typeof raw !== 'object' || raw.schemaVersion !== MODEL_ATTR_SCHEMA_VERSION) {
+      return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+    }
+    return {
+      schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+      userTier: raw.userTier || null,
+      cascadeModelConfigs: Array.isArray(raw.cascadeModelConfigs) ? raw.cascadeModelConfigs : [],
+      conversations: (raw.conversations && typeof raw.conversations === 'object') ? raw.conversations : {}
+    };
+  } catch {
+    return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+  }
+}
+
+function aggregateModelDailyFromAttrCache(attrCache) {
+  const dailyModels = {};
+  if (!attrCache || !attrCache.conversations) return dailyModels;
+  const seenRids = new Set();
+  const configs = attrCache.cascadeModelConfigs || [];
+
+  for (const [convId, entry] of Object.entries(attrCache.conversations)) {
+    const items = Array.isArray(entry?.items) ? entry.items : [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!Array.isArray(it) || it.length < 6) continue;
+      const [rid, rawOrKey, dateKey, inpRaw, cacRaw, outRaw] = it;
+      const dedupKey = rid || `${convId}:${i}:${dateKey}:${inpRaw}:${outRaw}`;
+      if (seenRids.has(dedupKey)) continue;
+      seenRids.add(dedupKey);
+      if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+
+      const inp = Math.max(0, Number(inpRaw) || 0);
+      const cac = Math.max(0, Number(cacRaw) || 0);
+      const out = Math.max(0, Number(outRaw) || 0);
+      const tot = inp + cac + out;
+      if (tot <= 0) continue;
+
+      const modelKey = normalizeModelFamily(rawOrKey, configs) || 'unattributed';
+      if (!dailyModels[dateKey]) dailyModels[dateKey] = {};
+      if (!dailyModels[dateKey][modelKey]) {
+        dailyModels[dateKey][modelKey] = { input: 0, cache: 0, output: 0, total: 0, steps: 0 };
+      }
+      dailyModels[dateKey][modelKey].input += inp;
+      dailyModels[dateKey][modelKey].cache += cac;
+      dailyModels[dateKey][modelKey].output += out;
+      dailyModels[dateKey][modelKey].total += tot;
+      dailyModels[dateKey][modelKey].steps += 1;
+    }
+  }
+  return dailyModels;
+}
+
+async function fetchHostUserMeta(origin) {
+  if (!origin || !/^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) return null;
+  if (cachedHostMeta.origin === origin && cachedHostMeta.csrfToken && Date.now() - cachedHostMeta.at < 300000) {
+    return cachedHostMeta;
+  }
+  try {
+    const html = await request(origin);
+    const match = html.match(/window\.__APP_CONFIG__\s*=\s*(.*?);/);
+    if (!match) return null;
+    const token = JSON.parse(match[1]).csrfToken;
+    let userTier = cachedHostMeta.userTier;
+    let cascadeModelConfigs = cachedHostMeta.cascadeModelConfigs;
+    try {
+      const statusRes = await request(origin, 'GetUserStatus', {}, token);
+      const us = statusRes?.userStatus;
+      if (us?.userTier) {
+        userTier = { id: us.userTier.id || '', name: us.userTier.name || '' };
+      }
+      const cfgs = us?.cascadeModelConfigData?.clientModelConfigs;
+      if (Array.isArray(cfgs) && cfgs.length > 0) {
+        cascadeModelConfigs = cfgs.map(c => ({
+          label: c.label || '',
+          modelId: c.modelOrAlias?.model || c.modelId || '',
+          alias: c.modelOrAlias?.alias || '',
+          quotaInfo: c.quotaInfo || null
+        }));
+      }
+    } catch {}
+    cachedHostMeta = { origin, at: Date.now(), csrfToken: token, userTier, cascadeModelConfigs };
+    return cachedHostMeta;
+  } catch {
+    return null;
+  }
+}
+
+function scanLocalTranscriptsAndArchive(home) {
   const agDir = path.join(home, '.gemini', 'antigravity');
   const brainDir = path.join(agDir, 'brain');
   const convDir = path.join(agDir, 'conversations');
-  const archivePath = path.join(agDir, 'token_usage_archive_v1.json');
+  const archivePathV3 = path.join(agDir, 'token_usage_archive_v3.json');
+  const legacyArchivePathV1 = path.join(agDir, 'token_usage_archive_v1.json');
+  const readArchivePath = fs.existsSync(archivePathV3) ? archivePathV3 : legacyArchivePathV1;
+  const archivePath = archivePathV3;
+  const attrPath = path.join(agDir, 'model_attribution_cache_v1.json');
 
   let archive = { schemaVersion: 0, firstUseDate: null, firstInstallDate: null, firstTokenDate: null, dailyMap: {}, maxConversations: 0 };
   try {
-    if (fs.existsSync(archivePath)) {
-      const raw = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
+    if (fs.existsSync(readArchivePath)) {
+      const raw = JSON.parse(fs.readFileSync(readArchivePath, 'utf8'));
       if (raw && typeof raw === 'object') {
         archive.schemaVersion = Number(raw.schemaVersion) || 0;
         if (typeof raw.firstInstallDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.firstInstallDate)) {
@@ -320,12 +539,14 @@ function collectTokenHistory(options = {}) {
     }
   };
 
-  // 1. Check conversations/*.pb timestamps for earliest local Antigravity installation/session
+  // 1. Check conversations/*.pb timestamps (and optional CLI conversations) for earliest local installation/session
   let pbCount = 0;
-  try {
-    if (fs.existsSync(convDir)) {
-      for (const name of fs.readdirSync(convDir)) {
-        const p = path.join(convDir, name);
+  const scanConvFolder = (dir) => {
+    try {
+      if (!fs.existsSync(dir)) return;
+      for (const name of fs.readdirSync(dir)) {
+        if (isCompanionTempFile(name)) continue;
+        const p = path.join(dir, name);
         try {
           const st = fs.statSync(p);
           if (st.isFile()) {
@@ -335,44 +556,101 @@ function collectTokenHistory(options = {}) {
           }
         } catch {}
       }
-    }
-  } catch {}
+    } catch {}
+  };
+  scanConvFolder(convDir);
+  for (const cliFolder of ['antigravity-cli', 'antigravity_cli']) {
+    scanConvFolder(path.join(home, '.gemini', cliFolder, 'conversations'));
+  }
 
-  // 2. Walk brain/**/transcript.jsonl for complete step & token history (with per-file stat cache)
-  const transcriptFiles = [];
-  const walkBrain = (dir) => {
+  // 2. Fast-walk brain/**/transcript.jsonl skipping heavy directories (steps, scratch, media, artifacts)
+  const transcriptJobs = [];
+  const visitedDirs = new Set();
+  const walkBrain = (dir, depth = 0, topConvId = null) => {
+    if (depth > 4) return;
     try {
       if (!fs.existsSync(dir)) return;
+      const resolved = path.resolve(dir);
+      if (visitedDirs.has(resolved)) return;
+      visitedDirs.add(resolved);
+
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (TRANSCRIPT_SKIP_DIRS.has(entry.name)) continue;
         const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) walkBrain(fullPath);
-        else if (entry.name === 'transcript.jsonl') transcriptFiles.push(fullPath);
+        if (entry.isDirectory()) {
+          const convId = depth === 0 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.name)
+            ? entry.name
+            : topConvId;
+          if (depth === 0) {
+            const stdLog = path.join(fullPath, '.system_generated', 'logs', 'transcript.jsonl');
+            const directLog = path.join(fullPath, 'transcript.jsonl');
+            let matchedFast = false;
+            if (fs.existsSync(stdLog)) {
+              transcriptJobs.push({ file: stdLog, convId });
+              matchedFast = true;
+            }
+            if (fs.existsSync(directLog)) {
+              transcriptJobs.push({ file: directLog, convId });
+              matchedFast = true;
+            }
+            if (matchedFast) continue;
+          }
+          walkBrain(fullPath, depth + 1, convId);
+        } else if (entry.name === 'transcript.jsonl') {
+          transcriptJobs.push({ file: fullPath, convId: topConvId });
+        }
       }
     } catch {}
   };
-  walkBrain(brainDir);
+  walkBrain(brainDir, 0, null);
+  for (const cliFolder of ['antigravity-cli', 'antigravity_cli']) {
+    const cliBrain = path.join(home, '.gemini', cliFolder, 'brain');
+    if (fs.existsSync(cliBrain)) walkBrain(cliBrain, 0, null);
+  }
 
+  const convTranscriptMeta = new Map();
   const scannedDaily = {};
-  for (const file of transcriptFiles) {
+  for (const job of transcriptJobs) {
+    const file = job.file;
     try {
       const st = fs.statSync(file);
       const cached = transcriptFileCache.get(file);
       let fileDaily;
+      let plannerSteps;
+      let stepDates;
+      let fallbackDateKey;
       if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs) {
         fileDaily = cached.daily;
+        plannerSteps = cached.plannerSteps;
+        stepDates = cached.stepDates;
+        fallbackDateKey = cached.fallbackDateKey;
       } else {
         fileDaily = {};
+        plannerSteps = [];
+        stepDates = [];
+        fallbackDateKey = formatLocalDateKey(new Date(st.mtimeMs));
         const content = fs.readFileSync(file, 'utf8');
         const lines = content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           if (!line) continue;
+          if (job.convId) {
+            const sd = extractLineStepDate(line);
+            if (sd && sd.dateKey) {
+              fallbackDateKey = sd.dateKey;
+              if (sd.stepIndex !== null) stepDates.push([sd.stepIndex, sd.dateKey]);
+            }
+          }
           const parsed = parsePlannerStepLine(line);
           if (parsed && parsed.total > 0 && parsed.createdAt) {
             const d = new Date(parsed.createdAt);
             if (!Number.isNaN(d.getTime())) {
               const dateKey = formatLocalDateKey(d);
+              fallbackDateKey = dateKey;
               registerInstallDate(dateKey);
+              if (job.convId) {
+                plannerSteps.push([parsed.input, parsed.cache, parsed.output, dateKey]);
+              }
               if (!fileDaily[dateKey]) {
                 fileDaily[dateKey] = { total: 0, input: 0, output: 0, cache: 0, steps: 0 };
               }
@@ -384,7 +662,34 @@ function collectTokenHistory(options = {}) {
             }
           }
         }
-        transcriptFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, daily: fileDaily });
+        if (stepDates.length > 1) stepDates.sort((a, b) => a[0] - b[0]);
+        transcriptFileCache.set(file, {
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          ctimeMs: st.ctimeMs,
+          daily: fileDaily,
+          plannerSteps,
+          stepDates,
+          fallbackDateKey
+        });
+      }
+      if (job.convId) {
+        const existing = convTranscriptMeta.get(job.convId);
+        if (existing) {
+          existing.size += st.size;
+          existing.mtimeMs = Math.max(existing.mtimeMs, Math.round(st.mtimeMs));
+          existing.plannerSteps.push(...plannerSteps);
+          existing.stepDates.push(...stepDates);
+          existing.fallbackDateKey = fallbackDateKey;
+        } else {
+          convTranscriptMeta.set(job.convId, {
+            size: st.size,
+            mtimeMs: Math.round(st.mtimeMs),
+            plannerSteps: plannerSteps.slice(),
+            stepDates: stepDates.slice(),
+            fallbackDateKey
+          });
+        }
       }
       for (const [dateKey, rec] of Object.entries(fileDaily)) {
         registerInstallDate(dateKey);
@@ -400,24 +705,114 @@ function collectTokenHistory(options = {}) {
     } catch {}
   }
 
-  // 3. Merge scannedDaily with persistent v2 archive (retaining all historical dates without 12-month cap)
+  return {
+    agDir,
+    archivePath,
+    attrPath,
+    archive,
+    getEarliestInstallDate: () => earliestInstallDate,
+    registerInstallDate,
+    pbCount,
+    transcriptCount: transcriptJobs.length,
+    scannedDaily,
+    convTranscriptMeta
+  };
+}
+
+function finalizeTokenHistoryOutput(scanCtx, attrCache) {
+  const {
+    archivePath,
+    archive,
+    registerInstallDate,
+    pbCount,
+    transcriptCount,
+    scannedDaily
+  } = scanCtx;
+  let earliestInstallDate = scanCtx.getEarliestInstallDate();
+
+  const scannedModelDaily = aggregateModelDailyFromAttrCache(attrCache);
+  const hasModels = Object.keys(scannedModelDaily).length > 0;
+
+  // 3. Merge scannedDaily + model attribution with persistent v3 archive (transcript + archive remain sole date/token authority)
   const mergedDaily = {};
-  const allKeys = new Set([...Object.keys(archive.dailyMap || {}), ...Object.keys(scannedDaily)]);
+  const allKeys = new Set([
+    ...Object.keys(archive.dailyMap || {}),
+    ...Object.keys(scannedDaily)
+  ]);
+
   for (const k of Array.from(allKeys).sort()) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
     registerInstallDate(k);
+    earliestInstallDate = scanCtx.getEarliestInstallDate();
     const oldRec = archive.dailyMap?.[k];
     const newRec = scannedDaily[k];
-    if (newRec && oldRec) {
+    const newModels = scannedModelDaily[k];
+    const oldModels = (archive.schemaVersion >= 3 && oldRec?.models && typeof oldRec.models === 'object') ? oldRec.models : null;
+
+    const baseInp = Math.max(oldRec?.input || 0, newRec?.input || 0);
+    const baseOut = Math.max(oldRec?.output || 0, newRec?.output || 0);
+    const baseCac = Math.max(oldRec?.cache || 0, newRec?.cache || 0);
+    const baseTot = Math.max(oldRec?.total || 0, newRec?.total || 0, baseInp + baseOut + baseCac);
+    const baseSteps = Math.max(oldRec?.steps || 0, newRec?.steps || 0);
+
+    let mergedModels = undefined;
+    if (newModels || oldModels) {
+      mergedModels = {};
+      const mKeys = new Set([...Object.keys(oldModels || {}), ...Object.keys(newModels || {})]);
+      for (const mk of mKeys) {
+        const om = oldModels?.[mk];
+        const nm = newModels?.[mk];
+        if (om && nm) {
+          mergedModels[mk] = {
+            input: Math.max(om.input || 0, nm.input || 0),
+            cache: Math.max(om.cache || 0, nm.cache || 0),
+            output: Math.max(om.output || 0, nm.output || 0),
+            total: Math.max(om.total || 0, nm.total || 0),
+            steps: Math.max(om.steps || 0, nm.steps || 0)
+          };
+        } else {
+          const src = nm || om;
+          mergedModels[mk] = {
+            input: Number(src.input) || 0,
+            cache: Number(src.cache) || 0,
+            output: Number(src.output) || 0,
+            total: Number(src.total) || 0,
+            steps: Number(src.steps) || 0
+          };
+        }
+      }
+
+      let sumMInp = 0, sumMCac = 0, sumMOut = 0;
+      for (const mv of Object.values(mergedModels)) {
+        sumMInp += mv.input || 0;
+        sumMCac += mv.cache || 0;
+        sumMOut += mv.output || 0;
+      }
+      const scaleInp = sumMInp > baseInp && sumMInp > 0 ? (baseInp / sumMInp) : 1;
+      const scaleCac = sumMCac > baseCac && sumMCac > 0 ? (baseCac / sumMCac) : 1;
+      const scaleOut = sumMOut > baseOut && sumMOut > 0 ? (baseOut / sumMOut) : 1;
+      if (scaleInp < 1 || scaleCac < 1 || scaleOut < 1) {
+        for (const mv of Object.values(mergedModels)) {
+          mv.input = Math.floor(mv.input * scaleInp);
+          mv.cache = Math.floor(mv.cache * scaleCac);
+          mv.output = Math.floor(mv.output * scaleOut);
+          mv.total = mv.input + mv.cache + mv.output;
+        }
+      }
+      for (const [mk, mv] of Object.entries(mergedModels)) {
+        if ((mv.total || 0) <= 0) delete mergedModels[mk];
+      }
+    }
+
+    if (baseTot > 0 || newRec || oldRec) {
       mergedDaily[k] = {
-        total: Math.max(oldRec.total || 0, newRec.total || 0),
-        input: Math.max(oldRec.input || 0, newRec.input || 0),
-        output: Math.max(oldRec.output || 0, newRec.output || 0),
-        cache: Math.max(oldRec.cache || 0, newRec.cache || 0),
-        steps: Math.max(oldRec.steps || 0, newRec.steps || 0)
+        total: baseTot,
+        input: baseInp,
+        output: baseOut,
+        cache: baseCac,
+        steps: baseSteps,
+        ...(mergedModels && Object.keys(mergedModels).length > 0 ? { models: mergedModels } : {})
       };
-    } else {
-      mergedDaily[k] = newRec || oldRec;
     }
   }
 
@@ -459,13 +854,17 @@ function collectTokenHistory(options = {}) {
   const cacheRatio = grandTotalTokens > 0 ? Number(((totalCacheTokens / grandTotalTokens) * 100).toFixed(1)) : 0;
   const todayNetTokens = todayInputTokens + todayOutputTokens;
   const todayCacheRatio = todayTokens > 0 ? Number(((todayCacheTokens / todayTokens) * 100).toFixed(1)) : 0;
-  const totalConversations = Math.max(archive.maxConversations || 0, transcriptFiles.length, pbCount);
+  const totalConversations = Math.max(archive.maxConversations || 0, transcriptCount, pbCount);
 
   const out = {
+    pricingSchemaVersion: 3,
     updatedAt: `${todayKey} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`,
     firstUseDate: effectiveFirstUseDate,
     firstTokenDate,
     firstInstallDate: earliestInstallDate,
+    userTier: attrCache?.userTier || null,
+    cascadeModelConfigs: attrCache?.cascadeModelConfigs || [],
+    hasModelAttribution: hasModels,
     summary: {
       grandTotalTokens,
       totalInputTokens,
@@ -492,23 +891,187 @@ function collectTokenHistory(options = {}) {
     dailyMap: mergedDaily
   };
 
-  try {
-    fs.mkdirSync(agDir, { recursive: true });
-    fs.writeFileSync(archivePath, JSON.stringify({
-      schemaVersion: 2,
-      firstUseDate: effectiveFirstUseDate,
-      firstTokenDate,
-      firstInstallDate: earliestInstallDate,
-      maxConversations: totalConversations,
-      updatedAt: out.updatedAt,
-      dailyMap: mergedDaily
-    }, null, 2), 'utf8');
-  } catch {}
+  const nextSchemaVersion = hasModels || archive.schemaVersion >= 3 ? 3 : 2;
+  atomicWriteJsonSync(archivePath, {
+    schemaVersion: nextSchemaVersion,
+    firstUseDate: effectiveFirstUseDate,
+    firstTokenDate,
+    firstInstallDate: earliestInstallDate,
+    maxConversations: totalConversations,
+    updatedAt: out.updatedAt,
+    dailyMap: mergedDaily
+  }, {
+    schemaVersion: nextSchemaVersion,
+    firstUseDate: effectiveFirstUseDate,
+    firstTokenDate,
+    firstInstallDate: earliestInstallDate,
+    maxConversations: totalConversations,
+    dailyMap: mergedDaily
+  });
+
+  return out;
+}
+
+function collectTokenHistory(options = {}) {
+  const home = options.homeDir || process.env.USERPROFILE || os.homedir();
+  if (!options.force && cachedTokenHistory && cachedTokenHistoryHome === home && Date.now() - cachedTokenHistoryAt < 15000) {
+    return cachedTokenHistory;
+  }
+  const scanCtx = scanLocalTranscriptsAndArchive(home);
+  const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath);
+  const out = finalizeTokenHistoryOutput(scanCtx, attrCache);
 
   cachedTokenHistory = out;
   cachedTokenHistoryAt = Date.now();
   cachedTokenHistoryHome = home;
+  cachedTokenHistoryHasModels = Boolean(out.hasModelAttribution);
   return out;
 }
 
-module.exports = { collect, collectTokenHistory, parsePlannerStepLine, scanFiles, pythonScan, resolvePython };
+async function collectTokenHistoryAsync(options = {}) {
+  const home = options.homeDir || process.env.USERPROFILE || os.homedir();
+  const origin = options.origin || '';
+  if (
+    !options.force &&
+    cachedTokenHistory &&
+    cachedTokenHistoryHome === home &&
+    (!origin || cachedTokenHistoryHasModels) &&
+    Date.now() - cachedTokenHistoryAt < 15000
+  ) {
+    return cachedTokenHistory;
+  }
+  if (!options.homeDir && activeHistoryAsyncPromise) {
+    return activeHistoryAsyncPromise;
+  }
+
+  const run = (async () => {
+    const scanCtx = scanLocalTranscriptsAndArchive(home);
+    const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath);
+    let attrDirty = false;
+
+    if (origin && /^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) {
+      const hostMeta = await fetchHostUserMeta(origin);
+      if (hostMeta && hostMeta.csrfToken) {
+        if (hostMeta.userTier && JSON.stringify(attrCache.userTier) !== JSON.stringify(hostMeta.userTier)) {
+          attrCache.userTier = hostMeta.userTier;
+          attrDirty = true;
+        }
+        if (Array.isArray(hostMeta.cascadeModelConfigs) && hostMeta.cascadeModelConfigs.length > 0) {
+          if (JSON.stringify(attrCache.cascadeModelConfigs) !== JSON.stringify(hostMeta.cascadeModelConfigs)) {
+            attrCache.cascadeModelConfigs = hostMeta.cascadeModelConfigs;
+            attrDirty = true;
+          }
+        }
+
+        const pendingConvs = [];
+        for (const [convId, tMeta] of scanCtx.convTranscriptMeta.entries()) {
+          const prev = attrCache.conversations[convId];
+          const needsRefresh = options.forceModelRescan === true ||
+            !prev ||
+            prev.tSize !== tMeta.size ||
+            prev.tMtime !== tMeta.mtimeMs;
+          if (needsRefresh) {
+            pendingConvs.push([convId, tMeta]);
+          }
+        }
+
+        const batchSize = 8;
+        for (let i = 0; i < pendingConvs.length; i += batchSize) {
+          const slice = pendingConvs.slice(i, i + batchSize);
+          await Promise.all(slice.map(async ([convId, tMeta]) => {
+            try {
+              const res = await request(origin, 'GetCascadeTrajectoryGeneratorMetadata', {
+                cascadeId: convId,
+                generatorMetadataOffset: 0,
+                includeMessages: false
+              }, hostMeta.csrfToken);
+              const usageTuples = [];
+              const metaRows = Array.isArray(res?.generatorMetadata) ? res.generatorMetadata : [];
+              for (let r = 0; r < metaRows.length; r++) {
+                const g = metaRows[r];
+                const cm = g?.chatModel;
+                if (!cm) continue;
+                const lastRetry = Array.isArray(cm.retryInfos) && cm.retryInfos.length > 0 ? cm.retryInfos[cm.retryInfos.length - 1] : null;
+                const u = (lastRetry && lastRetry.usage) ? lastRetry.usage : cm.usage;
+                if (!u) continue;
+                const inp = Math.max(0, Number(u.inputTokens) || 0);
+                const cac = Math.max(0, Number(u.cacheReadTokens) || 0);
+                const out = Math.max(0, Number(u.outputTokens) || 0);
+                if (inp + cac + out <= 0) continue;
+
+                const rid = String(u.responseId || u.messageId || `${convId}:${r}:${(g.stepIndices || []).join(',')}:${inp}:${out}`);
+                const rawModel = String(cm.modelDisplayName || u.responseModel || u.model || cm.model || '');
+                const modelKey = normalizeModelFamily(rawModel, attrCache.cascadeModelConfigs) || rawModel || 'unattributed';
+                usageTuples.push({
+                  rid,
+                  modelKey,
+                  inp,
+                  cac,
+                  out,
+                  stepIndices: g.stepIndices,
+                  startStepIndex: cm.chatStartMetadata?.startStepIndex
+                });
+              }
+              const matchedDates = matchPlannerStepsDates(
+                usageTuples,
+                tMeta.plannerSteps,
+                tMeta.stepDates,
+                tMeta.fallbackDateKey
+              );
+              const items = usageTuples.map((u, idx) => [u.rid, u.modelKey, matchedDates[idx], u.inp, u.cac, u.out]);
+              attrCache.conversations[convId] = {
+                tSize: tMeta.size,
+                tMtime: tMeta.mtimeMs,
+                items
+              };
+              attrDirty = true;
+            } catch {
+              // If LanguageServer doesn't know an archived/purged trajectory, mark current mtime/size so we don't retry every 15s
+              if (!attrCache.conversations[convId]) {
+                attrCache.conversations[convId] = {
+                  tSize: tMeta.size,
+                  tMtime: tMeta.mtimeMs,
+                  items: []
+                };
+                attrDirty = true;
+              }
+            }
+          }));
+          if (i + batchSize < pendingConvs.length) {
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        }
+      }
+    }
+
+    if (attrDirty) {
+      atomicWriteJsonSync(scanCtx.attrPath, {
+        schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+        updatedAt: new Date().toISOString(),
+        userTier: attrCache.userTier,
+        cascadeModelConfigs: attrCache.cascadeModelConfigs,
+        conversations: attrCache.conversations
+      }, {
+        schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+        userTier: attrCache.userTier,
+        conversations: attrCache.conversations
+      });
+    }
+
+    const out = finalizeTokenHistoryOutput(scanCtx, attrCache);
+    cachedTokenHistory = out;
+    cachedTokenHistoryAt = Date.now();
+    cachedTokenHistoryHome = home;
+    cachedTokenHistoryHasModels = Boolean(out.hasModelAttribution);
+    return out;
+  })();
+
+  if (!options.homeDir) activeHistoryAsyncPromise = run;
+  try {
+    return await run;
+  } finally {
+    if (activeHistoryAsyncPromise === run) activeHistoryAsyncPromise = null;
+  }
+}
+
+module.exports = { collect, collectTokenHistory, collectTokenHistoryAsync, parsePlannerStepLine, scanFiles, pythonScan, resolvePython };

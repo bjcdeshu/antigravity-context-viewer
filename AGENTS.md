@@ -1,6 +1,6 @@
 # AI Agent Installation & Execution Guide (AGENTS.md)
 
-This repository packages **Antigravity 对话上下文查看器 & Token 用量看板 (`antigravity-context-viewer` v2.8.0)** — a native-styled session context window progress bar (with always-visible inline context usage), account-wide token usage counter & 5-view activity heatmap (`每天` / `每周` / `每月` / `今年` / `累计总量`), and attachment analyzer for **Google Antigravity Desktop (including v2.30.0+ BaseWindow / WebContentsView architecture)**.
+This repository packages **Antigravity 对话上下文查看器 & Token 用量看板 (`antigravity-context-viewer` v2.9.0)** — a native-styled session context window progress bar (with always-visible inline context usage and per-session API equivalent cost tracking), account-wide multi-model API valuation & 5-view token activity heatmap (`每天` / `每周` / `每月` / `今年` / `累计总量`), and attachment analyzer for **Google Antigravity Desktop (including v2.31.0+ BaseWindow / WebContentsView architecture)**.
 
 When a user asks an AI Agent (Antigravity, Claude Code, Codex, Cursor, etc.) to install, update, check, or uninstall this project, follow these exact, zero-dependency steps.
 

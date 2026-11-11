@@ -6,7 +6,12 @@
     summarize,
     getLvlForRange,
     getDailyReferenceCost,
-    calculateIntervalCost
+    calculateIntervalCost,
+    normalizeModelFamily,
+    resolveModelDisplayLabel,
+    getModelRates,
+    calculateTurnCost,
+    calculateSessionCost
   } = (globalThis.__AGContextMeterCore || {});
   const host = document.createElement('div');
   host.id = 'ag-context-meter';
@@ -800,6 +805,59 @@
     .pop-det-col{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px}
     .pop-det-val{font-size:11px;font-weight:500;color:var(--ag-pop-sub);font-variant-numeric:tabular-nums;white-space:nowrap}
     .pop-det-trans{font-size:9.5px;color:var(--ag-pop-muted);opacity:0.88;white-space:nowrap;line-height:1.2}
+    .pop-model{font-size:10px;color:var(--ag-pop-muted);margin-top:5px;padding-top:4px;border-top:1px solid var(--ag-border-subtle);font-variant-numeric:tabular-nums;line-height:1.35;white-space:nowrap}
+
+    /* API 等值计价切换胶囊、顶栏卡片费用角标、模型价值构成条与本会话费用区 (v2.9 Direction B) */
+    .pricing-mode-pill{
+      display:inline-flex;align-items:center;gap:4px;
+      font-size:11px;font-weight:500;line-height:1;
+      padding:4px 8px;border-radius:999px;
+      border:1px solid var(--ag-border-card);
+      background:var(--ag-bg-subcard);color:var(--ag-text-secondary);
+      cursor:pointer;transition:border-color .14s ease,color .14s ease,background-color .14s ease;
+    }
+    .pricing-mode-pill:hover{color:var(--ag-text-primary);border-color:var(--ag-btn-border-hover);background:var(--ag-btn-hover)}
+    .pricing-mode-pill[data-mode="standard"]{
+      border-color:var(--ag-custom-token-accent,var(--ag-token-accent-default));
+      color:var(--ag-custom-token-accent,var(--ag-token-accent-default));
+    }
+    .t-card-cost{
+      font-family:var(--ag-font-mono);font-size:11px;font-weight:600;
+      color:var(--ag-custom-token-accent,var(--ag-token-accent-default));
+      font-variant-numeric:tabular-nums;letter-spacing:-0.02em;
+    }
+    #h-sum-cost{cursor:pointer}
+    .cost-breakdown-strip{
+      margin-top:8px;padding:7px 2px 2px;
+      border-top:1px solid var(--ag-border-subtle);
+      display:flex;flex-direction:column;gap:5px;
+    }
+    .cost-model-bar{
+      display:flex;width:100%;height:4px;border-radius:2px;
+      overflow:hidden;background:var(--ag-track-bg);gap:1.5px;
+    }
+    .cost-model-seg{height:100%;display:block;transition:width .2s ease}
+    .cost-meta-row{
+      display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+      font-size:10.5px;color:var(--ag-text-muted);font-variant-numeric:tabular-nums;
+    }
+    .cost-model-legend{color:var(--ag-text-secondary);overflow:hidden;text-overflow:ellipsis}
+    .cost-io-savings{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--ag-text-muted)}
+    .cost-saved-hl{color:#34d399;font-weight:600}
+    :host([data-theme="light"]) .cost-saved-hl{color:#15803d}
+    #session-cost-summary{
+      background:transparent;border:0;border-bottom:1px solid var(--ag-border-subtle);
+      border-radius:0;padding:2px 0 10px;margin:0 0 8px;
+    }
+    #ctx-pricing-mode-btn{cursor:pointer;transition:border-color .14s ease,color .14s ease}
+    #ctx-pricing-mode-btn:hover{color:var(--ag-text-primary);border-color:var(--ag-btn-border-hover)}
+    .sess-cost-meta{
+      font-size:10.5px;color:var(--ag-text-muted);margin-top:5px;
+      display:flex;justify-content:space-between;align-items:center;gap:8px;
+      font-variant-numeric:tabular-nums;
+    }
+    .sess-cost-meta-left{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ag-text-secondary)}
+    .sess-cost-meta-right{flex-shrink:0}
 
     @media (prefers-reduced-motion: reduce){
       *,.ag-unit,.ring-fill,.key-bar-fill,.ag-panel,#context-tooltip,.heat-cell,.w-bar-fill{
@@ -870,7 +928,7 @@
   <section id="panel" class="ag-panel" hidden aria-label="会话与上下文详情">
     <div class="panel-header-bar">
       <div class="panel-title">
-        <h3>当前会话上下文<span id="v">v2.8</span></h3>
+        <h3>当前会话上下文<span id="v">v2.9</span></h3>
       </div>
       <div class="panel-header-actions">
         <button id="theme-toggle" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">自动</button>
@@ -926,6 +984,32 @@
           </div>
         </div>
         <div id="speed-takeaway" class="key-takeaway" data-quiet="true">等待首次模型输出产生速度统计…</div>
+      </div>
+
+      <!-- 分区 3: 本会话 API 等值估算（去盒化平铺） -->
+      <div id="session-cost-summary">
+        <div class="key-header">
+          <span class="key-title">本会话 API 等值</span>
+          <button id="ctx-pricing-mode-btn" class="key-pill pill-muted" type="button" title="点击切换计价口径：发生日官方优惠实价 ⇄ 标准零售原价">优惠期实价</button>
+        </div>
+        <div class="key-stats">
+          <div class="key-stat">
+            <div class="key-stat-label">会话累计</div>
+            <div id="sess-cost-total" class="key-stat-val" style="color:var(--ag-custom-token-accent,var(--ag-text-primary));">—</div>
+          </div>
+          <div class="key-stat">
+            <div class="key-stat-label">最近一轮</div>
+            <div id="sess-cost-last" class="key-stat-val">—</div>
+          </div>
+          <div class="key-stat">
+            <div class="key-stat-label">缓存已省</div>
+            <div id="sess-cost-saved" class="key-stat-val cost-saved-hl">—</div>
+          </div>
+        </div>
+        <div class="sess-cost-meta">
+          <span id="sess-cost-meta-left" class="sess-cost-meta-left">等待请求统计产生会话费用…</span>
+          <span id="sess-cost-meta-right" class="sess-cost-meta-right"></span>
+        </div>
       </div>
 
       <!-- 二级交互折叠区 1: 面板背景与指标颜色自定义（精简隐藏，保持默认跟随主题） -->
@@ -1058,6 +1142,7 @@
         <span id="panel-tokens-title" style="font-size:13px;font-weight:600;color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">Token 用量一览</span>
       </div>
       <div class="panel-header-actions">
+        <button id="pricing-mode-toggle" class="pricing-mode-pill" type="button" data-mode="actual" title="点击切换 API 等值计价口径：发生日官方优惠实价 ⇄ 标准零售原价">优惠期实价</button>
         <button id="theme-toggle-tokens" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随IDE（点击切换：浅色 / 深色 / 自动）">自动</button>
         <button id="close-tokens" class="panel-icon-btn" type="button" aria-label="收起详情">×</button>
       </div>
@@ -1066,22 +1151,22 @@
     <div id="view-tokens">
       <div class="token-stat-cards">
         <div class="t-card">
-          <div class="t-card-lbl"><span>全量累计</span><span style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">Total</span></div>
+          <div class="t-card-lbl"><span>全量累计</span><span id="t-total-cost" class="t-card-cost">≈ $0.00</span></div>
           <div class="t-card-val" id="t-total-val">--</div>
           <div class="t-card-sub" id="t-total-sub">读取中...</div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>今日使用</span><span style="color:var(--ag-custom-token-accent,#d97757)">Today</span></div>
+          <div class="t-card-lbl"><span>今日使用</span><span id="t-today-cost" class="t-card-cost">≈ $0.00</span></div>
           <div class="t-card-val" id="t-today-val">--</div>
           <div class="t-card-sub" id="t-today-sub">读取中...</div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>本月使用</span><span style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">Month</span></div>
+          <div class="t-card-lbl"><span>本月使用</span><span id="t-month-cost" class="t-card-cost">≈ $0.00</span></div>
           <div class="t-card-val" id="t-month-val">--</div>
           <div class="t-card-sub" id="t-month-sub">读取中...</div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>年度使用</span><span style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">Year</span></div>
+          <div class="t-card-lbl"><span>年度使用</span><span id="t-year-cost" class="t-card-cost">≈ $0.00</span></div>
           <div class="t-card-val" id="t-year-val">--</div>
           <div class="t-card-sub" id="t-year-sub">读取中...</div>
         </div>
@@ -1132,9 +1217,19 @@
             <span class="heat-sum-label">活跃日均</span>
             <span class="heat-sum-val" id="h-sum-active-avg">--</span>
           </div>
-          <div class="heat-sum-item" title="按 Gemini 混合基准参考单价（Prompt $0.75/M · Cache 10% $0.075/M · Output $3.75/M）折算的 API 等值参考">
-            <span class="heat-sum-label">API 等值参考</span>
+          <div class="heat-sum-item" id="h-sum-cost-wrap" title="按真实模型单价与 >200K 分档折算的官方 API 等值（点击切换：优惠期实价 / 标准零售价）">
+            <span class="heat-sum-label" id="h-sum-cost-lbl">API 等值</span>
             <span class="heat-sum-val" id="h-sum-cost" style="color:var(--ag-custom-token-accent,var(--ag-token-accent-default))">--</span>
+          </div>
+        </div>
+        <div class="cost-breakdown-strip" id="h-cost-breakdown">
+          <div class="cost-model-bar" id="cost-model-bar" aria-label="模型等值费用构成比例"></div>
+          <div class="cost-meta-row">
+            <span class="cost-model-legend" id="cost-model-legend">构成：暂无区间记录</span>
+            <span class="cost-io-savings" id="cost-io-savings">
+              <span id="cost-io-text">输入 $0.00 · 输出 $0.00 · 缓存 $0.00</span>
+              <span id="cost-saved-pill" class="cost-saved-hl">缓存省 $0.00</span>
+            </span>
           </div>
         </div>
         <div class="heat-footer-bar">
@@ -1345,6 +1440,7 @@
     <div class="pop-date" id="heat-pop-date">10月24日</div>
     <div class="pop-val" id="heat-pop-val">2.47亿 个 Token</div>
     <div class="pop-det" id="heat-pop-det"></div>
+    <div class="pop-model" id="heat-pop-model" style="display:none"></div>
   </div>`;
 
   (document.body || document.documentElement).appendChild(host);
@@ -1356,6 +1452,19 @@
     if (v >= 1e6) return `${parseFloat((v / 1e6).toFixed(2))}M`;
     if (v >= 1000) return `${parseFloat((v / 1000).toFixed(1))}K`;
     return fmt(v);
+  };
+  const fmtUSD = (val, opts = {}) => {
+    const n = Math.max(0, Number(val) || 0);
+    if (n <= 0) return '$0.00';
+    if (opts.precise && n < 0.01) {
+      return n < 0.0005 ? '<$0.001' : `$${n.toFixed(3)}`;
+    }
+    if (n < 0.01) return `$${n.toFixed(3)}`;
+    if (n >= 1000) {
+      const digits = n >= 10000 ? 0 : 2;
+      return `$${n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+    }
+    return `$${n.toFixed(2)}`;
   };
   // 悬停信息气泡专用紧凑计数格式（如 37k、475k、1.05M）
   const fmtBubbleToken = v => {
@@ -1373,7 +1482,7 @@
   const state = {
     route: null, count: 0, latest: null, requestAt: 0, requestError: '',
     requestBusy: false, requestNext: 0, scanBusy: false, scanNext: 0,
-    scanError: '', scan: null, generation: 0, controllers: new Set(),
+    scanError: '', scan: null, sessionSteps: new Map(), generation: 0, controllers: new Set(),
     disposed: false, layoutMode: 'wide', tooltipOpen: false
   };
   const route = () => location.pathname.match(/^\/c\/([a-f\d-]{36})(?:\/|$)/i)?.[1] || null;
@@ -1381,6 +1490,11 @@
   let heatPageOffset = 0;
   let heatMonthOffset = 0;
   let heatYearOffset = 0;
+  let pricingMode = 'actual';
+  try {
+    const savedPricing = typeof localStorage !== 'undefined' && localStorage.getItem('ag_pricing_mode');
+    if (savedPricing === 'standard' || savedPricing === 'actual') pricingMode = savedPricing;
+  } catch {}
 
   // =========================================================================
   // 模块 1: 0 级主题跟随、面板与菜单统一背景色、热力图 5 档色阶与自定义颜色选取器
@@ -1884,6 +1998,7 @@
     syncNativeOverlayTheme();
   }
 
+  let lastSyncedOverlayKey = '';
   function syncNativeOverlayTheme() {
     try {
       if (typeof window === 'undefined') return;
@@ -1896,6 +2011,9 @@
       const tbRect = titlebar?.getBoundingClientRect ? titlebar.getBoundingClientRect() : null;
       const topMenuBarBottom = (tbRect && tbRect.height > 0 && tbRect.top >= 20) ? Math.round(tbRect.top) : 0;
       const targetHeightCssPx = topMenuBarBottom > 0 ? Math.max(28, Math.min(40, topMenuBarBottom)) : 40;
+      const syncKey = `${bg}|${fg}|${targetHeightCssPx}`;
+      if (syncKey === lastSyncedOverlayKey) return;
+      lastSyncedOverlayKey = syncKey;
       if (typeof window.contextMeterAPI?.syncOverlay === 'function') {
         void window.contextMeterAPI.syncOverlay({ color: bg, symbolColor: fg, heightCssPx: targetHeightCssPx });
       } else if (typeof window.electronNative?.setTitleBarOverlay === 'function') {
@@ -3134,10 +3252,102 @@
   const heatPopDate = el('heat-pop-date');
   const heatPopVal = el('heat-pop-val');
   const heatPopDet = el('heat-pop-det');
+  const heatPopModel = el('heat-pop-model');
 
   function hidePopover() {
     if (heatPop) heatPop.style.opacity = '0';
   }
+
+  function renderPopoverModelLine(costObj) {
+    if (!heatPopModel) return;
+    const totalCost = Number(costObj?.totalCostUSD ?? costObj?.costUSD ?? 0) || 0;
+    const models = Array.isArray(costObj?.models) ? costObj.models : [];
+    const saved = Number(costObj?.cacheSavedUSD) || 0;
+    if (models.length > 0 && totalCost > 0) {
+      const topStr = models
+        .slice(0, 3)
+        .map(m => `${m.shortLabel} ${m.sharePct}%`)
+        .join(' · ');
+      const savedStr = saved >= 0.01 ? ` · 缓存省 ${fmtUSD(saved)}` : '';
+      heatPopModel.textContent = `${topStr}${savedStr}`;
+      heatPopModel.style.display = 'block';
+    } else {
+      heatPopModel.textContent = '';
+      heatPopModel.style.display = 'none';
+    }
+  }
+
+  function syncPricingModeButtons() {
+    const isStd = pricingMode === 'standard';
+    const label = isStd ? '标准零售价' : '优惠期实价';
+    const tip = isStd
+      ? '当前计价：官方 API 标准零售原价（不含限时特惠）\n点击切换为：发生日官方优惠实价'
+      : '当前计价：发生日官方优惠实价（含 Google 2026.11-12 限时特惠）\n点击切换为：官方 API 标准零售原价';
+    const toggleBtn = el('pricing-mode-toggle');
+    if (toggleBtn) {
+      toggleBtn.textContent = label;
+      toggleBtn.setAttribute('data-mode', pricingMode);
+      toggleBtn.title = tip;
+    }
+    const ctxBtn = el('ctx-pricing-mode-btn');
+    if (ctxBtn) {
+      ctxBtn.textContent = label;
+      ctxBtn.className = isStd ? 'key-pill pill-warn' : 'key-pill pill-muted';
+      ctxBtn.title = tip;
+    }
+    const sumCostLbl = el('h-sum-cost-lbl');
+    if (sumCostLbl) {
+      sumCostLbl.textContent = isStd ? 'API 等值(原价)' : 'API 等值(实价)';
+    }
+  }
+
+  function updateTokenCardsCosts() {
+    if (typeof calculateIntervalCost !== 'function') return;
+    const map = ANTIGRAVITY_TOKEN_DATA.dailyMap || {};
+    const allKeys = Object.keys(map).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && map[k]?.total > 0);
+    const todayStr = formatLocalYmd(new Date());
+    const monthPrefix = todayStr.slice(0, 7);
+    const yearPrefix = todayStr.slice(0, 4);
+    const opts = {
+      todayStr,
+      pricingMode,
+      cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+    };
+    const totalAgg = calculateIntervalCost(map, allKeys, opts);
+    const todayAgg = calculateIntervalCost(map, allKeys.filter(k => k === todayStr), opts);
+    const monthAgg = calculateIntervalCost(map, allKeys.filter(k => k.startsWith(monthPrefix)), opts);
+    const yearAgg = calculateIntervalCost(map, allKeys.filter(k => k.startsWith(yearPrefix)), opts);
+
+    const cTotal = el('t-total-cost');
+    const cToday = el('t-today-cost');
+    const cMonth = el('t-month-cost');
+    const cYear = el('t-year-cost');
+    if (cTotal) cTotal.textContent = `≈ ${fmtUSD(totalAgg.totalCostUSD)}`;
+    if (cToday) cToday.textContent = `≈ ${fmtUSD(todayAgg.totalCostUSD)}`;
+    if (cMonth) cMonth.textContent = `≈ ${fmtUSD(monthAgg.totalCostUSD)}`;
+    if (cYear) cYear.textContent = `≈ ${fmtUSD(yearAgg.totalCostUSD)}`;
+  }
+
+  function setPricingMode(mode) {
+    pricingMode = mode === 'standard' ? 'standard' : 'actual';
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('ag_pricing_mode', pricingMode);
+    } catch {}
+    syncPricingModeButtons();
+    updateTokenCardsCosts();
+    renderActiveHeatView(false);
+    render();
+    return pricingMode;
+  }
+
+  function togglePricingMode() {
+    return setPricingMode(pricingMode === 'actual' ? 'standard' : 'actual');
+  }
+
+  el('pricing-mode-toggle')?.addEventListener('click', togglePricingMode);
+  el('ctx-pricing-mode-btn')?.addEventListener('click', togglePricingMode);
+  el('h-sum-cost-wrap')?.addEventListener('click', togglePricingMode);
+  syncPricingModeButtons();
 
   function fmtYi(n) {
     if (!n || n <= 0) return '0';
@@ -3273,20 +3483,90 @@
 
   function applyTokenHistoryPayload(payload) {
     if (!payload || typeof payload !== 'object') return false;
+    const prevDailyMap = ANTIGRAVITY_TOKEN_DATA.dailyMap || {};
+    const incomingHasAnyModels = Boolean(
+      payload.dailyMap && typeof payload.dailyMap === 'object' &&
+      Object.values(payload.dailyMap).some(r => r?.models && typeof r.models === 'object' && Object.keys(r.models).length > 0)
+    );
+    const todayLocalStr = formatLocalYmd(new Date());
     const newMap = {};
     if (payload.dailyMap && typeof payload.dailyMap === 'object') {
       for (const [dKey, rec] of Object.entries(payload.dailyMap)) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dKey) || !rec) continue;
+        const recTotal = Number(rec.total) || 0;
+        const recInput = Number(rec.input) || 0;
+        const recOutput = Number(rec.output) || 0;
+        const recCache = Number(rec.cache) || 0;
+        let copiedModels = undefined;
+        if (rec.models && typeof rec.models === 'object' && Object.keys(rec.models).length > 0) {
+          copiedModels = {};
+          for (const [mk, mv] of Object.entries(rec.models)) {
+            if (!mv || typeof mv !== 'object') continue;
+            copiedModels[mk] = {
+              input: Number(mv.input) || 0,
+              cache: Number(mv.cache) || 0,
+              output: Number(mv.output) || 0,
+              total: Number(mv.total) || 0,
+              steps: Number(mv.steps) || 0
+            };
+          }
+        } else if (!incomingHasAnyModels && prevDailyMap[dKey]?.models && recTotal > 0) {
+          const prevRec = prevDailyMap[dKey];
+          copiedModels = {};
+          let sumM = 0;
+          for (const [mk, mv] of Object.entries(prevRec.models)) {
+            if (!mv || typeof mv !== 'object') continue;
+            const mt = Number(mv.total) || 0;
+            sumM += mt;
+            copiedModels[mk] = {
+              input: Number(mv.input) || 0,
+              cache: Number(mv.cache) || 0,
+              output: Number(mv.output) || 0,
+              total: mt,
+              steps: Number(mv.steps) || 0
+            };
+          }
+          if (sumM > recTotal && sumM > 0) {
+            const ratio = recTotal / sumM;
+            for (const mv of Object.values(copiedModels)) {
+              mv.input = Math.round(mv.input * ratio);
+              mv.cache = Math.round(mv.cache * ratio);
+              mv.output = Math.round(mv.output * ratio);
+              mv.total = mv.input + mv.cache + mv.output;
+            }
+          } else if (dKey === todayLocalStr && recTotal > (Number(prevRec.total) || 0) && typeof normalizeModelFamily === 'function') {
+            const activeFam = normalizeModelFamily(state.latest?.rawModel || state.latest?.model || '', ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs);
+            if (activeFam && activeFam !== 'unattributed') {
+              const dInp = Math.max(0, recInput - (Number(prevRec.input) || 0));
+              const dCac = Math.max(0, recCache - (Number(prevRec.cache) || 0));
+              const dOut = Math.max(0, recOutput - (Number(prevRec.output) || 0));
+              const dTot = dInp + dCac + dOut;
+              if (dTot > 0 && sumM + dTot <= recTotal) {
+                if (!copiedModels[activeFam]) copiedModels[activeFam] = { input: 0, cache: 0, output: 0, total: 0, steps: 0 };
+                copiedModels[activeFam].input += dInp;
+                copiedModels[activeFam].cache += dCac;
+                copiedModels[activeFam].output += dOut;
+                copiedModels[activeFam].total += dTot;
+                copiedModels[activeFam].steps += Math.max(0, (Number(rec.steps) || 0) - (Number(prevRec.steps) || 0));
+              }
+            }
+          }
+        }
         newMap[dKey] = {
-          total: Number(rec.total) || 0,
-          input: Number(rec.input) || 0,
-          output: Number(rec.output) || 0,
-          cache: Number(rec.cache) || 0,
-          steps: Number(rec.steps) || 0
+          total: recTotal,
+          input: recInput,
+          output: recOutput,
+          cache: recCache,
+          steps: Number(rec.steps) || 0,
+          ...(copiedModels && Object.keys(copiedModels).length > 0 ? { models: copiedModels } : {})
         };
       }
     }
     ANTIGRAVITY_TOKEN_DATA.dailyMap = newMap;
+    if (payload.userTier) ANTIGRAVITY_TOKEN_DATA.userTier = payload.userTier;
+    if (Array.isArray(payload.cascadeModelConfigs) && payload.cascadeModelConfigs.length > 0) {
+      ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs = payload.cascadeModelConfigs;
+    }
     const payloadFirstToken = (payload.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.firstTokenDate))
       ? payload.firstTokenDate
       : ((payload.summary?.firstTokenDate && /^\d{4}-\d{2}-\d{2}$/.test(payload.summary.firstTokenDate)) ? payload.summary.firstTokenDate : null);
@@ -3418,45 +3698,66 @@
     if (tYearVal) tYearVal.textContent = fmtCardM(yearTokens);
     if (tYearSub) tYearSub.textContent = `${keys.length} 天活动记录 · ${convCount} 会话`;
 
+    updateTokenCardsCosts();
     computeTimelineWindow();
     renderActiveHeatView(true);
     return true;
   }
 
   let historySyncBusy = false;
+  let pendingHistoryForce = false;
   let initialWindowHistoryApplied = false;
   async function syncTokenHistoryFromHost(force = false) {
-    if (historySyncBusy || state.disposed) return;
+    if (state.disposed) return;
+    if (historySyncBusy) {
+      if (force) pendingHistoryForce = true;
+      return;
+    }
     historySyncBusy = true;
     try {
       if (!initialWindowHistoryApplied && typeof window !== 'undefined' && window.__AGContextMeterHistory) {
         initialWindowHistoryApplied = true;
         applyTokenHistoryPayload(window.__AGContextMeterHistory);
       }
-      if (typeof window !== 'undefined' && typeof window.contextMeterAPI?.getTokenHistory === 'function') {
+      const live = typeof window !== 'undefined' ? window.__AGContextMeterLive : null;
+      const hasIpc = typeof window !== 'undefined' && typeof window.contextMeterAPI?.getTokenHistory === 'function';
+      let appliedLive = false;
+      if (live?.port && (live.preferLive || !hasIpc)) {
+        try {
+          const r = await fetch(`http://127.0.0.1:${live.port}/token-history`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-AG-Context-Token': live.token },
+            body: JSON.stringify({ force: Boolean(force) })
+          });
+          if (r.ok) {
+            const j = await r.json();
+            if (j?.ok && j.data) {
+              window.__AGContextMeterHistory = j.data;
+              applyTokenHistoryPayload(j.data);
+              appliedLive = true;
+            }
+          }
+        } catch {}
+      }
+      if (!appliedLive && hasIpc) {
         const res = await window.contextMeterAPI.getTokenHistory(Boolean(force));
         if (res?.ok && res.data) {
-          window.__AGContextMeterHistory = res.data;
           applyTokenHistoryPayload(res.data);
-        }
-      } else if (typeof window !== 'undefined' && window.__AGContextMeterLive?.port) {
-        const live = window.__AGContextMeterLive;
-        const r = await fetch(`http://127.0.0.1:${live.port}/token-history`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-AG-Context-Token': live.token },
-          body: JSON.stringify({ force: Boolean(force) })
-        });
-        if (r.ok) {
-          const j = await r.json();
-          if (j?.ok && j.data) {
-            window.__AGContextMeterHistory = j.data;
-            applyTokenHistoryPayload(j.data);
-          }
+          window.__AGContextMeterHistory = {
+            ...res.data,
+            dailyMap: ANTIGRAVITY_TOKEN_DATA.dailyMap,
+            cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs,
+            userTier: ANTIGRAVITY_TOKEN_DATA.userTier
+          };
         }
       }
     } catch {}
     finally {
       historySyncBusy = false;
+      if (pendingHistoryForce && !state.disposed) {
+        pendingHistoryForce = false;
+        void syncTokenHistoryFromHost(true);
+      }
     }
   }
 
@@ -3470,8 +3771,15 @@
     const win = computeTimelineWindow();
     const todayStr = formatLocalYmd(win.today);
     const agg = typeof calculateIntervalCost === 'function'
-      ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, dateKeys, { todayStr })
-      : { totalTokens: 0, netTokens: 0, cacheRatio: 0, activeDays: 0, activeDailyAverageTokens: 0, totalCostUSD: 0 };
+      ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, dateKeys, {
+          todayStr,
+          pricingMode,
+          cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+        })
+      : {
+          totalTokens: 0, netTokens: 0, cacheRatio: 0, activeDays: 0, activeDailyAverageTokens: 0,
+          totalCostUSD: 0, inputCostUSD: 0, cacheCostUSD: 0, outputCostUSD: 0, cacheSavedUSD: 0, models: []
+        };
 
     sumTokensEl.textContent = `${fmtYi(agg.totalTokens)} Tokens`;
     if (sumNetEl) {
@@ -3484,7 +3792,47 @@
         ? `${fmtYi(agg.activeDailyAverageTokens)}/天 (${agg.activeDays}天)`
         : '0/天 (0天)';
     }
-    sumCostEl.textContent = `≈ $${agg.totalCostUSD.toFixed(2)}`;
+    sumCostEl.textContent = `≈ ${fmtUSD(agg.totalCostUSD)}`;
+
+    const modelBar = el('cost-model-bar');
+    const modelLegend = el('cost-model-legend');
+    const ioText = el('cost-io-text');
+    const savedPill = el('cost-saved-pill');
+    const models = Array.isArray(agg.models) ? agg.models : [];
+
+    if (modelBar) {
+      modelBar.replaceChildren();
+      if (models.length > 0 && agg.totalCostUSD > 0) {
+        for (const m of models) {
+          if (m.costUSD <= 0) continue;
+          const seg = document.createElement('span');
+          seg.className = 'cost-model-seg';
+          seg.style.width = `${Math.max(1.5, (m.costUSD / agg.totalCostUSD) * 100).toFixed(1)}%`;
+          seg.style.background = m.color || '#d97757';
+          seg.title = `${m.label}: ${fmtUSD(m.costUSD)} (${m.sharePct}%)`;
+          modelBar.appendChild(seg);
+        }
+      }
+    }
+
+    if (modelLegend) {
+      if (models.length > 0 && agg.totalTokens > 0) {
+        const top = models.slice(0, 4);
+        const restUSD = models.slice(4).reduce((s, x) => s + (x.costUSD || 0), 0);
+        const parts = top.map(m => `${m.shortLabel} ${fmtUSD(m.costUSD)} (${m.sharePct}%)`);
+        if (restUSD >= 0.01) parts.push(`其余 ${fmtUSD(restUSD)}`);
+        modelLegend.textContent = `构成：${parts.join(' · ')}`;
+      } else {
+        modelLegend.textContent = '构成：暂无区间记录';
+      }
+    }
+
+    if (ioText) {
+      ioText.textContent = `输入 ${fmtUSD(agg.inputCostUSD)} · 输出 ${fmtUSD(agg.outputCostUSD)} · 缓存 ${fmtUSD(agg.cacheCostUSD)}`;
+    }
+    if (savedPill) {
+      savedPill.textContent = `缓存省 ${fmtUSD(agg.cacheSavedUSD)}`;
+    }
   }
 
   function renderHeatmapGrid(forceRebuild = false) {
@@ -3573,8 +3921,14 @@
 
         const showPop = () => {
           const d = item.date;
-          const costInfo = typeof getDailyReferenceCost === 'function' ? getDailyReferenceCost(item.rec) : { costUSD: 0 };
-          const costStr = costInfo.costUSD > 0 ? ` · ≈ $${costInfo.costUSD.toFixed(2)}` : '';
+          const costInfo = typeof getDailyReferenceCost === 'function'
+            ? getDailyReferenceCost(item.rec, {
+                dateKey: item.key,
+                pricingMode,
+                cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+              })
+            : { costUSD: 0, models: [] };
+          const costStr = costInfo.costUSD > 0 ? ` · ≈ ${fmtUSD(costInfo.costUSD)}` : '';
           heatPopDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日${item.isToday ? '（今日）' : (item.key === win.firstStr ? '（首次使用）' : '')}${costStr}`;
           heatPopVal.textContent = item.tokens > 0 ? `${fmtYi(item.tokens)} Tokens` : (item.isFuture ? '未来日期（待产生记录）' : '0 Tokens');
           if (item.rec) {
@@ -3584,8 +3938,10 @@
               <div class="pop-det-col"><span class="pop-det-val">Cache: ${fmtYi(item.rec.cache)}</span><span class="pop-det-trans">缓存</span></div>
             `.trim();
             heatPopDet.style.display = 'flex';
+            renderPopoverModelLine(costInfo);
           } else {
             heatPopDet.style.display = 'none';
+            renderPopoverModelLine(null);
           }
           const r = cell.getBoundingClientRect();
           heatPop.style.left = `${r.left + r.width / 2}px`;
@@ -3668,13 +4024,18 @@
 
       const showPop = () => {
         const agg = typeof calculateIntervalCost === 'function'
-          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, w.weekDates, { todayStr: formatLocalYmd(win.today) })
-          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0 };
-        const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
+          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, w.weekDates, {
+              todayStr: formatLocalYmd(win.today),
+              pricingMode,
+              cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+            })
+          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0, models: [] };
+        const costStr = agg.totalCostUSD > 0 ? ` · ≈ ${fmtUSD(agg.totalCostUSD)}` : '';
         heatPopDate.textContent = `${w.sDate.getFullYear()}.${w.sDate.getMonth() + 1}.${w.sDate.getDate()} - ${w.eDate.getMonth() + 1}.${w.eDate.getDate()}`;
         heatPopVal.textContent = w.sum > 0 ? `${fmtYi(w.sum)} Tokens${costStr}` : '0 Tokens';
         heatPopDet.innerHTML = `<span>周累计 · 净 ${fmtYi(agg.netTokens)} · 缓存 ${agg.cacheRatio}%</span>`;
         heatPopDet.style.display = 'block';
+        renderPopoverModelLine(w.sum > 0 ? agg : null);
         const r = col.getBoundingClientRect();
         heatPop.style.left = `${r.left + r.width / 2}px`;
         heatPop.style.top = `${r.top - 6}px`;
@@ -3761,8 +4122,14 @@
       }
 
       const showPop = () => {
-        const costInfo = typeof getDailyReferenceCost === 'function' ? getDailyReferenceCost(rec) : { costUSD: 0 };
-        const costStr = costInfo.costUSD > 0 ? ` · ≈ $${costInfo.costUSD.toFixed(2)}` : '';
+        const costInfo = typeof getDailyReferenceCost === 'function'
+          ? getDailyReferenceCost(rec, {
+              dateKey: k,
+              pricingMode,
+              cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+            })
+          : { costUSD: 0, models: [] };
+        const costStr = costInfo.costUSD > 0 ? ` · ≈ ${fmtUSD(costInfo.costUSD)}` : '';
         heatPopDate.textContent = `${targetYear}年${targetMonth + 1}月${day}日${isToday ? '（今日）' : ''}`;
         heatPopVal.textContent = tokens > 0 ? `${fmtYi(tokens)} Tokens${costStr}` : (isFuture ? '未来日期（待产生记录）' : '0 Tokens');
         if (rec) {
@@ -3772,8 +4139,10 @@
             <div class="pop-det-col"><span class="pop-det-val">Cache: ${fmtYi(rec.cache)}</span><span class="pop-det-trans">缓存</span></div>
           `.trim();
           heatPopDet.style.display = 'flex';
+          renderPopoverModelLine(costInfo);
         } else {
           heatPopDet.style.display = 'none';
+          renderPopoverModelLine(null);
         }
         const r = cell.getBoundingClientRect();
         heatPop.style.left = `${r.left + r.width / 2}px`;
@@ -3931,13 +4300,18 @@
 
       const showPop = () => {
         const agg = typeof calculateIntervalCost === 'function'
-          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, item.dates, { todayStr: formatLocalYmd(win.today) })
-          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0, activeDays: 0 };
-        const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
+          ? calculateIntervalCost(ANTIGRAVITY_TOKEN_DATA.dailyMap, item.dates, {
+              todayStr: formatLocalYmd(win.today),
+              pricingMode,
+              cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+            })
+          : { totalCostUSD: 0, netTokens: 0, cacheRatio: 0, activeDays: 0, models: [] };
+        const costStr = agg.totalCostUSD > 0 ? ` · ≈ ${fmtUSD(agg.totalCostUSD)}` : '';
         heatPopDate.textContent = `${targetYear}年${item.monthName}${item.isCurrent ? '（进行中）' : (item.monthIndex === peakMonthIndex ? '（年度峰值）' : '')}`;
         heatPopVal.textContent = item.tokens > 0 ? `${fmtYi(item.tokens)} Tokens${costStr}` : (item.isFuture ? '未来月份（尚未产生用量）' : '0 Tokens');
         heatPopDet.innerHTML = `<span>月度合计 · 净 ${fmtYi(agg.netTokens)} · 缓存 ${agg.cacheRatio}% (活跃 ${agg.activeDays} 天)</span>`;
         heatPopDet.style.display = 'block';
+        renderPopoverModelLine(item.tokens > 0 ? agg : null);
 
         const r = g.getBoundingClientRect ? g.getBoundingClientRect() : { left: cx, top: cy, width: radius * 2 };
         heatPop.style.left = `${r.left + (r.width || 0) / 2}px`;
@@ -4039,13 +4413,18 @@
       const pt = points[idx];
       const cumDates = Object.keys(map).filter(k => k <= pt.key);
       const agg = typeof calculateIntervalCost === 'function'
-        ? calculateIntervalCost(map, cumDates, { todayStr: formatLocalYmd(win.today) })
-        : { totalCostUSD: 0 };
-      const costStr = agg.totalCostUSD > 0 ? ` · ≈ $${agg.totalCostUSD.toFixed(2)}` : '';
+        ? calculateIntervalCost(map, cumDates, {
+            todayStr: formatLocalYmd(win.today),
+            pricingMode,
+            cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+          })
+        : { totalCostUSD: 0, models: [] };
+      const costStr = agg.totalCostUSD > 0 ? ` · ≈ ${fmtUSD(agg.totalCostUSD)}` : '';
       heatPopDate.textContent = `${pt.date.getFullYear()}年${pt.date.getMonth() + 1}月${pt.date.getDate()}日 (累计)`;
       heatPopVal.textContent = `${fmtYi(pt.val)} Tokens${costStr}`;
       heatPopDet.innerHTML = `<span>Cumulative Total · 自首次使用日 (${win.firstStr}) 累计</span>`;
       heatPopDet.style.display = 'block';
+      renderPopoverModelLine(pt.val > 0 ? agg : null);
       heatPop.style.left = `${e.clientX}px`;
       heatPop.style.top = `${r.top + (height - (pt.val / max) * (height - 12)) - 6}px`;
       heatPop.style.opacity = '1';
@@ -4477,6 +4856,58 @@
       }
     }
 
+    if (el('session-cost-summary')) {
+      const sessTotalEl = el('sess-cost-total');
+      const sessLastEl = el('sess-cost-last');
+      const sessSavedEl = el('sess-cost-saved');
+      const sessMetaLeft = el('sess-cost-meta-left');
+      const sessMetaRight = el('sess-cost-meta-right');
+
+      let turnsArr = Array.from(state.sessionSteps.values()).sort((a, b) => a.absIdx - b.absIdx);
+      if (turnsArr.length === 0 && d && (d.input > 0 || d.output > 0)) {
+        const uncached = Math.max(0, (Number(d.input) || 0) - (Number(d.cached) || 0));
+        turnsArr = [{
+          absIdx: 0,
+          rawModel: d.rawModel || d.model || '',
+          input: uncached,
+          cache: Number(d.cached) || 0,
+          output: Number(d.output) || 0,
+          dateKey: formatLocalYmd(new Date())
+        }];
+      }
+
+      const sc = (typeof calculateSessionCost === 'function' && turnsArr.length > 0)
+        ? calculateSessionCost(turnsArr, {
+            pricingMode,
+            cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+          })
+        : null;
+
+      if (sc && sc.turnsCount > 0) {
+        if (sessTotalEl) sessTotalEl.textContent = `≈ ${fmtUSD(sc.totalCostUSD, { precise: true })}`;
+        if (sessLastEl) sessLastEl.textContent = `≈ ${fmtUSD(sc.lastTurnCostUSD, { precise: true })}`;
+        if (sessSavedEl) sessSavedEl.textContent = sc.cacheSavedUSD > 0 ? fmtUSD(sc.cacheSavedUSD, { precise: true }) : '$0.00';
+        if (sessMetaLeft) {
+          const topModels = (sc.models || [])
+            .slice(0, 2)
+            .map(m => `${m.shortLabel} ${m.sharePct}%`)
+            .join(' · ');
+          sessMetaLeft.textContent = `${sc.turnsCount} 轮请求${topModels ? ` · ${topModels}` : ''}`;
+        }
+        if (sessMetaRight) {
+          sessMetaRight.textContent = `入 ${fmtUSD(sc.inputCostUSD)} · 出 ${fmtUSD(sc.outputCostUSD)} · 缓 ${fmtUSD(sc.cacheCostUSD)}`;
+        }
+      } else {
+        if (sessTotalEl) sessTotalEl.textContent = '—';
+        if (sessLastEl) sessLastEl.textContent = '—';
+        if (sessSavedEl) sessSavedEl.textContent = '—';
+        if (sessMetaLeft) {
+          sessMetaLeft.textContent = state.requestBusy ? '正在读取本会话请求记录…' : '等待请求统计产生会话费用…';
+        }
+        if (sessMetaRight) sessMetaRight.textContent = '';
+      }
+    }
+
     el('model').textContent = d?.model?.startsWith('MODEL_PLACEHOLDER') ? '模型标识：' + d.model : d?.model || '未返回模型信息';
     el('request-status').textContent = d?.exceeded ? '输入超限（已失败）' : d?.error ? (d.errorClassification?.shortBadge ? `${d.errorClassification.shortBadge}（已失败）` : '已失败') : d?.status === 'reported' ? '已返回实际统计' : d?.status === 'estimated' ? '只有本地估算' : '等待统计，未确认执行状态';
     el('actual').textContent = d?.actual != null ? token(d.actual) : d?.exceeded ? `>${fmt(d.serviceLimit || 0)}（实际总数未返回）` : '真实用量未知';
@@ -4508,8 +4939,27 @@
       const data = await response.json(); if (generation !== state.generation || state.disposed) return;
       const rows = data.generatorMetadata || [];
       state.count = rows.length ? offset + rows.length : 0;
+      const todayKey = formatLocalYmd(new Date());
+      for (let i = 0; i < rows.length; i++) {
+        const cm = rows[i]?.chatModel;
+        if (!cm) continue;
+        const lastRetry = Array.isArray(cm.retryInfos) && cm.retryInfos.length > 0 ? cm.retryInfos[cm.retryInfos.length - 1] : null;
+        const u = (lastRetry && lastRetry.usage) ? lastRetry.usage : cm.usage;
+        if (!u) continue;
+        const inp = Math.max(0, Number(u.inputTokens) || 0);
+        const cac = Math.max(0, Number(u.cacheReadTokens) || 0);
+        const out = Math.max(0, Number(u.outputTokens) || 0);
+        if (inp + cac + out <= 0) continue;
+        const absIdx = offset + i;
+        const stepKey = String(u.responseId || u.messageId || `step:${absIdx}`);
+        const rawModel = String(cm.modelDisplayName || u.responseModel || u.model || cm.model || '');
+        state.sessionSteps.set(stepKey, { absIdx, rawModel, input: inp, cache: cac, output: out, dateKey: todayKey });
+      }
       for (let i = rows.length - 1; i >= 0; i--) {
-        const value = summarize(rows[i], { previousValidContext: state.latest });
+        const value = summarize(rows[i], {
+          previousValidContext: state.latest,
+          cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs
+        });
         if (value) {
           state.latest = withStepError(value, rows[i]);
           break;
@@ -4546,6 +4996,7 @@
     const id = route();
     if (id !== state.route) {
       for (const controller of state.controllers) controller.abort(); state.controllers.clear(); state.generation++;
+      state.sessionSteps.clear();
       Object.assign(state, { route: id, count: 0, latest: null, requestAt: 0, requestError: '', requestBusy: false, requestNext: 0, scanBusy: false, scanNext: 0, scanError: '', scan: null }); toggle(false); hideContextTooltip(); renderFiles(null); render();
       void syncTokenHistoryFromHost(true);
     }
@@ -4559,7 +5010,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '2.8.0',
+    version: '2.9.0',
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();
@@ -4569,6 +5020,9 @@
     },
     theme: () => resolveTheme(),
     setTheme: mode => { currentThemeMode = mode; try { localStorage.setItem('ag_theme_mode', mode); } catch {}; applyTheme(); },
+    getPricingMode: () => pricingMode,
+    setPricingMode,
+    togglePricingMode,
     getCustomColors: () => ({ ...customColors }),
     setCustomColor,
     resetCustomColors,
@@ -4587,6 +5041,7 @@
     updateHeatTabThumb,
     setTokenHistoryForTest: payload => {
       initialWindowHistoryApplied = true;
+      ANTIGRAVITY_TOKEN_DATA.dailyMap = {};
       return applyTokenHistoryPayload(payload);
     },
     getTokenHistorySnapshotForTest: () => JSON.parse(JSON.stringify(ANTIGRAVITY_TOKEN_DATA)),

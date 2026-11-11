@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ipcMain, app } = require('electron');
-const { collect, collectTokenHistory } = require('./meter-collector');
+const { collect, collectTokenHistoryAsync } = require('./meter-collector');
 
 function ensureProxyEnvironment(targetEnv = process.env) {
   try {
@@ -86,7 +86,7 @@ function registerIpcOnce() {
   ipcMain.handle('context-meter:token-history', async (event, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
-    try { return { ok: true, data: collectTokenHistory({ force: force === true }) }; }
+    try { return { ok: true, data: await collectTokenHistoryAsync({ origin: url.origin, force: force === true }) }; }
     catch (e) { return { ok: false, error: e.message }; }
   });
 

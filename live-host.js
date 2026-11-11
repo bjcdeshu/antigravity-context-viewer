@@ -6,7 +6,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { connect } = require('./local-api');
-const { collect, collectTokenHistory } = require('./meter-collector');
+const { collect, collectTokenHistoryAsync } = require('./meter-collector');
 const { getStateDir } = require('./asar-engine');
 const { tryHotInject } = require('./install');
 (async () => {
@@ -30,7 +30,7 @@ const { tryHotInject } = require('./install');
       try {
         const request = body ? JSON.parse(body) : {};
         const data = req.url === '/token-history'
-          ? collectTokenHistory({ force: request.force === true })
+          ? await collectTokenHistoryAsync({ origin: api.origin, force: request.force === true })
           : await collect(api.origin, request.id, { force: request.force === true });
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ ok: true, data }));
