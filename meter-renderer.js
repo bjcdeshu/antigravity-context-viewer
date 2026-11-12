@@ -2669,7 +2669,7 @@
             const auxOpen = typeof document.querySelector === 'function'
               && !!document.querySelector('[data-testid="aux-pane-sash"]');
             const root = typeof document.querySelector === 'function'
-              ? document.querySelector('div.h-screen.w-screen')
+              ? document.querySelector('div.h-screen.w-screen, .agy-shell')
               : null;
             const rightClusterVar = root?.style?.getPropertyValue?.('--right-cluster-width')?.trim() || '';
             if (auxOpen) {
