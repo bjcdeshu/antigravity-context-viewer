@@ -130,7 +130,13 @@ test('speed badge and speed summary card accurately render model output speed an
   await h.flush();
   assert.equal(h.elements.get('speed-amount').textContent, '112.1 tok/s');
   assert.match(h.elements.get('speed-hover-extra').textContent, /21\.3s/);
-  assert.match(h.elements.get('badge-speed').title, /112\.1 tok\/s/);
+  h.elements.get('badge-speed').trigger('mouseenter');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-visible'), 'true');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-anchor'), 'speed');
+  assert.match(h.elements.get('ctx-tip-pct').textContent, /112\.1 tok\/s/);
+  assert.match(h.elements.get('ctx-tip-detail').textContent, /总耗时 21\.3s · 首字 8\.4s · 产出 2,388 tok/);
+  h.elements.get('badge-speed').trigger('mouseleave');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-visible'), 'false');
   assert.equal(h.elements.get('speed-val').textContent, '112.1 tok/s');
   assert.equal(h.elements.get('speed-duration').textContent, '21.3s');
   assert.equal(h.elements.get('speed-ttft').textContent, '8.4s');
@@ -148,10 +154,10 @@ test('drawer toggle controls secondary technical details visibility', () => {
   assert.ok(body);
   btn.click();
   assert.equal(body.style.display, 'block');
-  assert.equal(arrow.textContent, '▲ 点击收起明细');
+  assert.equal(arrow.textContent, '收起');
   btn.click();
   assert.equal(body.style.display, 'none');
-  assert.equal(arrow.textContent, '▼ 点击展开明细');
+  assert.equal(arrow.textContent, '展开');
   h.sandbox.__AGContextMeter.dispose();
 });
 test('decoupled dual panels and hover switching between context and tokens', () => {
@@ -322,7 +328,7 @@ test('6 independent custom color slots support custom values, reset to theme def
 test('window controls overlay spacer, convPane flex-grow self-healing, and clean dispose', () => {
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
-  assert.equal(api.version, '2.9.0');
+  assert.equal(api.version, '3.0.0');
   api.dispose();
 });
 
@@ -505,9 +511,9 @@ test('v5.1: heatmap top-row anti-clipping padding and popover Chinese translatio
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
 
-  // 1) Ensure .heat-scroll-box has padding to prevent top cell hover outline clipping
+  // 1) Ensure .heat-scroll-box has padding to prevent top cell hover outline clipping and unified meta type scale
   assert.match(source, /\.heat-scroll-box\s*\{[^}]*padding:\s*6px 6px 4px 6px/);
-  assert.match(source, /\.pop-det-trans\s*\{[^}]*font-size:\s*9\.5px/);
+  assert.match(source, /\.pop-det-trans\s*\{[^}]*font-size:\s*var\(--ag-fs-meta\)/);
 
   // 2) Trigger daily heatmap cell click
   api.setTokenHistoryForTest({
@@ -534,10 +540,10 @@ test('v5.1: heatmap top-row anti-clipping padding and popover Chinese translatio
   // Value contains 'Tokens' without translation
   assert.match(heatPopVal.textContent, /Tokens$/);
 
-  // Detail section has 3 columns with Chinese translations directly beneath Prompt, Output, Cache
-  assert.match(heatPopDet.innerHTML, /Prompt:[\s\S]*?<span class="pop-det-trans">提示词<\/span>/);
-  assert.match(heatPopDet.innerHTML, /Output:[\s\S]*?<span class="pop-det-trans">输出<\/span>/);
-  assert.match(heatPopDet.innerHTML, /Cache:[\s\S]*?<span class="pop-det-trans">缓存<\/span>/);
+  // Detail section has 3 pure-Chinese columns for 提示词, 输出, 缓存
+  assert.match(heatPopDet.innerHTML, /<span class="pop-det-trans">提示词<\/span><span class="pop-det-val">738K<\/span>/);
+  assert.match(heatPopDet.innerHTML, /<span class="pop-det-trans">输出<\/span><span class="pop-det-val">52\.2K<\/span>/);
+  assert.match(heatPopDet.innerHTML, /<span class="pop-det-trans">缓存<\/span><span class="pop-det-val">2\.8M<\/span>/);
 
   api.dispose();
 });
@@ -758,21 +764,25 @@ test('v2.30.0: fine-grained error classification preserves previous valid contex
   assert.equal(h.elements.get('context-amount').textContent, '85K (43%)');
 
   // Step 2: Subsequent poll encounters a quota exhaustion error (non-overflow)
-  h.sandbox.Date.now = () => Number.MAX_SAFE_INTEGER;
-  h.tick();
-  h.pending[1].resolve(response({
-    retryInfos: [{ error: 'RESOURCE_EXHAUSTED: MODEL_CAPACITY_EXHAUSTED. Quota reset after 1h30m' }]
-  }));
-  await h.flush();
+  const origNow = h.sandbox.Date.now;
+  try {
+    h.sandbox.Date.now = () => Number.MAX_SAFE_INTEGER;
+    h.tick();
+    h.pending[1].resolve(response({
+      retryInfos: [{ error: 'RESOURCE_EXHAUSTED: MODEL_CAPACITY_EXHAUSTED. Quota reset after 1h30m' }]
+    }));
+    await h.flush();
 
-  // Context token count is preserved alongside the fine-grained short badge
-  assert.equal(h.elements.get('context-amount').textContent, '85K (额度耗尽)');
-  assert.equal(h.elements.get('amount').textContent, '额度耗尽');
-  assert.equal(h.elements.get('key-badge').textContent, '额度耗尽');
-  assert.equal(h.elements.get('key-used').textContent, '85K (42.5%)');
-  assert.match(h.elements.get('key-takeaway').textContent, /1 小时 30 分钟/);
-
-  h.sandbox.__AGContextMeter.dispose();
+    // Context token count is preserved alongside the fine-grained short badge
+    assert.equal(h.elements.get('context-amount').textContent, '85K (额度耗尽)');
+    assert.equal(h.elements.get('amount').textContent, '额度耗尽');
+    assert.equal(h.elements.get('key-badge').textContent, '额度耗尽');
+    assert.equal(h.elements.get('key-used').textContent, '85K (42.5%)');
+    assert.match(h.elements.get('key-takeaway').textContent, /1 小时 30 分钟/);
+  } finally {
+    h.sandbox.Date.now = origNow;
+    h.sandbox.__AGContextMeter.dispose();
+  }
 });
 
 test('v2.9.0: API equivalent cost cards, actual vs standard pricing toggle, model breakdown bar, popover attribution, and multi-turn session cost', async () => {
@@ -873,6 +883,618 @@ test('v2.9.0: API equivalent cost cards, actual vs standard pricing toggle, mode
 
   api.dispose();
 });
+
+test('v3.0.0 U1-U3: Onyx token bridge, manual theme override guard, unified 3-capsule tooltip, Quiet-by-Default pills, and zero excluded bloat', async () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  h.finishScan();
+
+  // 1) CSS & markup invariants: Onyx bridge gated on auto mode, Google Sans Code, butt-cap ring, chevron overflow, pruned dead drawers, zero F2/ROI/CNY/CLI bloat
+  assert.match(source, /:host\(\[data-theme-mode="auto"\]:not\(\[data-panel-tone\]\)\)\{[\s\S]*?--ag-surface:var\(--onyx-raised/);
+  assert.match(source, /:host\(\[data-theme-mode="auto"\]:not\(\[data-panel-tone\]\)\)\{[\s\S]*?--ag-well:var\(--onyx-well/);
+  assert.match(source, /--ag-font-mono:var\(--editor-font-family,"Google Sans Code"/);
+  assert.doesNotMatch(source, /JetBrains Mono/);
+  assert.match(source, /\.ag-unit\{[^}]*border-radius:var\(--ag-radius-full\)/);
+  assert.match(source, /id="ring-fill"[^>]*stroke-linecap="butt"/);
+  assert.match(source, /M4 6\.25L8 10\.25L12 6\.25/);
+  assert.doesNotMatch(source, /id="color-drawer"|id="token-color-drawer"/);
+  assert.doesNotMatch(source, /id="quota-pool|¥|CNY|>_ CLI|订阅回本|ROI/i);
+
+  // 2) Manual theme override guard sets data-theme-mode="light" / "dark" so host --onyx-* tokens do not leak into manual mode
+  assert.equal(h.host.getAttribute('data-theme-mode'), 'auto');
+  api.setTheme('light');
+  assert.equal(h.host.getAttribute('data-theme-mode'), 'light');
+  assert.equal(h.host.getAttribute('data-theme'), 'light');
+  api.setTheme('dark');
+  assert.equal(h.host.getAttribute('data-theme-mode'), 'dark');
+  assert.equal(h.host.getAttribute('data-theme'), 'dark');
+  api.setTheme('auto');
+  assert.equal(h.host.getAttribute('data-theme-mode'), 'auto');
+
+  // 3) Unified #context-tooltip anchors across #badge, #badge-speed, and #badge-tokens
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  api.setTokenHistoryForTest({
+    firstTokenDate: todayStr,
+    dailyMap: { [todayStr]: { total: 5000000, input: 1000000, output: 200000, cache: 3800000, steps: 10 } }
+  });
+  h.elements.get('badge-tokens').trigger('mouseenter');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-visible'), 'true');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-anchor'), 'tokens');
+  assert.equal(h.elements.get('ctx-tip-title').textContent, 'Token 用量：');
+  assert.match(h.elements.get('ctx-tip-pct').textContent, /累计 5M · 今日 5M/);
+  assert.match(h.elements.get('ctx-tip-detail').textContent, /API 等值 ≈ \$/);
+  h.elements.get('badge-tokens').trigger('mouseleave');
+  assert.equal(h.elements.get('context-tooltip').getAttribute('data-visible'), 'false');
+
+  // 4) Quiet-by-Default pills: healthy context & >=15 tok/s speeds stay pill-muted; only slow (<15 tok/s) turns pill-warn
+  h.pending[0].resolve(response({
+    timeToFirstToken: '1.0s',
+    streamingDuration: '9.0s',
+    usage: { inputTokens: 80000, outputTokens: 200 },
+    chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+  }));
+  await h.flush();
+  assert.equal(h.elements.get('key-badge').textContent, '正常');
+  assert.equal(h.elements.get('key-badge').className, 'key-pill pill-muted');
+  assert.equal(h.elements.get('speed-badge').textContent, '良好'); // 20.0 tok/s
+  assert.equal(h.elements.get('speed-badge').className, 'key-pill pill-muted');
+  assert.equal(h.elements.get('ctx-pricing-mode-btn').className, 'key-pill pill-muted');
+  api.setPricingMode('standard');
+  assert.equal(h.elements.get('ctx-pricing-mode-btn').className, 'key-pill pill-muted');
+
+  api.dispose();
+});
+
+test('v3.0.0 P0-2 & F3: post-/compact active context breakdown, silent-when-zero compaction counter, and dynamic 256K/840K limits', async () => {
+  // 1) Zero compactions -> #ctx-compact-note is hidden, missing maxContextTokens shows '—' instead of fabricating 256K
+  const s0 = session();
+  s0.compactionCount = 0;
+  const h0 = harness(s0);
+  h0.finishScan();
+  h0.pending[0].resolve(response({ usage: { inputTokens: 45000, outputTokens: 500 } }));
+  await h0.flush();
+  assert.equal(h0.elements.get('ctx-compact-note').hidden, true);
+  assert.equal(h0.elements.get('key-limit').textContent, '—');
+  assert.doesNotMatch(h0.elements.get('percent').textContent, /非 1M/);
+  h0.sandbox.__AGContextMeter.dispose();
+
+  // 2) Post-/compact session on 840K Claude Opus with native server tokenBreakdown overriding stale pre-checkpoint cumulative archive
+  const s1 = session();
+  s1.groups.tools = { chars: 1200000, bytes: 1200000, low: 450000, high: 550000 }; // huge pre-compaction archive
+  s1.compactionCount = 2;
+  s1.lastCompactionFreedTokens = 185000;
+  const h1 = harness(s1);
+  h1.finishScan();
+  h1.pending[0].resolve(response({
+    model: 'MODEL_PLACEHOLDER_M402',
+    usage: { inputTokens: 20000, cacheReadTokens: 80000, outputTokens: 1000 },
+    chatStartMetadata: {
+      contextWindowMetadata: {
+        maxContextTokens: 840000,
+        tokenBreakdown: {
+          groups: [
+            { type: 'TOKEN_TYPE_SYSTEM_PROMPT', numTokens: 20000 },
+            { type: 'TOKEN_TYPE_TOOLS', numTokens: 30000 },
+            { type: 'TOKEN_TYPE_CHAT_MESSAGES', numTokens: 50000 }
+          ]
+        }
+      }
+    }
+  }));
+  await h1.flush();
+
+  assert.equal(h1.elements.get('key-limit').textContent, '840K');
+  assert.match(h1.elements.get('percent').textContent, /相对 840K 预算/);
+  assert.doesNotMatch(h1.elements.get('percent').textContent, /非 1M/);
+  assert.equal(h1.elements.get('ctx-compact-note').hidden, false);
+  assert.equal(h1.elements.get('ctx-compact-note').textContent, '已压缩 2 次 · 释放 185K');
+  assert.equal(h1.elements.get('ctx-breakdown-text').textContent, '构成：对话 50% · 工具定义 30% · 系统指令 20%');
+  assert.equal(h1.elements.get('bd-seg-assistant').getAttribute('data-rank'), '0');
+  assert.equal(h1.elements.get('bd-seg-assistant').style.width, '50.0%');
+  h1.sandbox.__AGContextMeter.dispose();
+
+  // 3) Fallback to session.activeBreakdown when server tokenBreakdown is absent
+  const s2 = session();
+  s2.groups.tools = { chars: 1200000, bytes: 1200000, low: 450000, high: 550000 };
+  s2.compactionCount = 1;
+  s2.lastCompactionFreedTokens = 0;
+  s2.activeBreakdown = {
+    systemTokens: 15000,
+    toolDefTokens: 25000,
+    userTokens: 10000,
+    assistantTokens: 30000,
+    toolResultTokens: 20000,
+    thinkingTokens: 0
+  };
+  const h2 = harness(s2);
+  h2.finishScan();
+  h2.pending[0].resolve(response({
+    usage: { inputTokens: 100000, outputTokens: 500 },
+    chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+  }));
+  await h2.flush();
+  assert.equal(h2.elements.get('ctx-compact-note').hidden, false);
+  assert.equal(h2.elements.get('ctx-compact-note').textContent, '已压缩 1 次');
+  assert.equal(h2.elements.get('ctx-breakdown-text').textContent, '构成：系统 40% · 回复 30% · 工具 20% · 用户 10%');
+  h2.sandbox.__AGContextMeter.dispose();
+});
+
+test('v3.0.0 F1: /swarm + subagent + /btw session cost rollup, Top Root Sessions XSS safety & expand/collapse, and IPC hot-reload preservation', async () => {
+  const rootId = '11111111-1111-1111-1111-111111111111';
+  const childId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  h.finishScan();
+
+  // 1) Standalone session without children keeps #sess-tree completely silent
+  h.pending[0].resolve(response({
+    model: 'MODEL_PLACEHOLDER_M528',
+    usage: { responseId: 'r-root-1', inputTokens: 100000, cacheReadTokens: 200000, outputTokens: 4000 },
+    chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+  }));
+  await h.flush();
+  assert.equal(h.elements.get('sess-tree').hidden, true);
+  assert.equal(h.elements.get('top-sessions').hidden, true);
+
+  // 2) Inject v3.0.0 history payload with sessionRollups, childToRoot, and 7 topSessions (including XSS title)
+  const topSessions = [
+    { rootId, title: '<img src=x onerror=alert(1)> Swarm 升级总控', childCount: 3, totalTokens: 28000000, netTokens: 4000000, totalCostUSD: 6.20, totalRetailCostUSD: 9.80 },
+    ...Array.from({ length: 6 }, (_, idx) => ({
+      rootId: `root-extra-${idx}`,
+      title: `历史主会话 #${idx + 1}`,
+      childCount: idx === 0 ? 1 : 0,
+      totalTokens: 5000000 - idx * 500000,
+      netTokens: 800000,
+      totalCostUSD: 2.50 - idx * 0.3,
+      totalRetailCostUSD: 4.00 - idx * 0.4
+    }))
+  ];
+  api.setTokenHistoryForTest({
+    firstTokenDate: '2026-11-10',
+    summary: { rootSessionCount: 12, subagentSessionCount: 9 },
+    childToRoot: { [childId]: rootId },
+    sessionRollups: {
+      [rootId]: {
+        rootId,
+        title: '<img src=x onerror=alert(1)> Swarm 升级总控',
+        ownTokens: 8000000,
+        ownCostUSD: 1.70,
+        ownRetailCostUSD: 2.80,
+        childCount: 3,
+        childTokens: 20000000,
+        childCostUSD: 4.50,
+        childRetailCostUSD: 7.00,
+        totalTokens: 28000000,
+        totalCostUSD: 6.20,
+        totalRetailCostUSD: 9.80
+      }
+    },
+    topSessions,
+    dailyMap: {
+      '2026-11-10': { total: 28000000, input: 3500000, output: 500000, cache: 24000000, steps: 40 }
+    }
+  });
+
+  // Root session displays child count + tree rollup immediately
+  assert.equal(h.elements.get('sess-tree').hidden, false);
+  assert.match(h.elements.get('sess-tree-left').textContent, /含 3 个子代理 · 整树合计 ≈ \$/);
+  assert.match(h.elements.get('sess-tree-right').textContent, /子 \$4\.50$/);
+
+  // Standard pricing mode updates child & top-session rollup costs
+  api.setPricingMode('standard');
+  assert.match(h.elements.get('sess-tree-right').textContent, /子 \$7\.00$/);
+  api.setPricingMode('actual');
+
+  // Top Root Sessions renders 5 collapsed rows, highlights current root, escapes XSS via textContent, and expands/collapses
+  assert.equal(h.elements.get('top-sessions').hidden, false);
+  assert.equal(h.elements.get('top-sessions-meta').textContent, '12 主会话 · 9 子代理');
+  assert.equal(h.elements.get('top-sessions-list').children.length, 5);
+  const topRow0 = h.elements.get('top-sessions-list').children[0];
+  assert.equal(topRow0.getAttribute('data-current'), 'true');
+  assert.equal(topRow0.children[0].children[0].textContent, '<img src=x onerror=alert(1)> Swarm 升级总控');
+  assert.equal(topRow0.children[1].textContent, '+3 子代理');
+  assert.equal(topRow0.children[3].textContent, '≈ $6.20');
+  assert.equal(h.elements.get('top-sessions-more').hidden, false);
+  assert.equal(h.elements.get('top-sessions-more').textContent, '展开全部 7 个');
+  h.elements.get('top-sessions-more').click();
+  assert.equal(h.elements.get('top-sessions-list').children.length, 7);
+  assert.equal(h.elements.get('top-sessions-more').textContent, '收起');
+  h.elements.get('top-sessions-more').click();
+  assert.equal(h.elements.get('top-sessions-list').children.length, 5);
+
+  // 3) Navigating into child subagent session attributes it back to its parent root session
+  h.sandbox.location.pathname = `/c/${childId}`;
+  h.tick();
+  h.finishScan(1);
+  h.pending[1].resolve(response({
+    model: 'MODEL_PLACEHOLDER_M528',
+    usage: { responseId: 'r-child-1', inputTokens: 50000, outputTokens: 1000 }
+  }));
+  await h.flush();
+  assert.equal(h.elements.get('sess-tree').hidden, false);
+  assert.match(h.elements.get('sess-tree-left').textContent, /^子代理会话 · 主会话「<img src=x onerror=alert\(1\)> Swarm 升级总控」$/);
+  assert.equal(h.elements.get('sess-tree-right').textContent, '整树 ≈ $6.20');
+
+  // 4) Critical hot-reload preservation: legacy v2.9 IPC payload lacking sessionRollups preserves v3 rollups & counts
+  h.sandbox.window.contextMeterAPI.getTokenHistory = async () => ({
+    ok: true,
+    data: {
+      firstTokenDate: '2026-11-10',
+      summary: { totalConversations: 21 },
+      dailyMap: {
+        '2026-11-10': { total: 29000000, input: 3600000, output: 550000, cache: 24850000, steps: 42 }
+      }
+    }
+  });
+  await api.syncTokenHistoryForTest(true);
+  const preserved = api.getTokenHistorySnapshotForTest();
+  assert.equal(preserved.summary.rootSessionCount, 12);
+  assert.equal(preserved.summary.subagentSessionCount, 9);
+  assert.equal(preserved.sessionRollups[rootId].childCount, 3);
+  assert.equal(preserved.topSessions.length, 7);
+  assert.equal(h.sandbox.window.__AGContextMeterHistory.sessionRollups[rootId].childCount, 3);
+  assert.equal(h.elements.get('top-sessions').hidden, false);
+
+  api.dispose();
+});
+
+test('v3.0.0 P0-1 & F3: sessionSteps historical dateKey, turnDateByKey backfill, cm.responseModel (M528 Hydrogen / M667 Orchestrator), and rewind pruning', async () => {
+  const origDateNow = Date.now;
+  let fakeNow = 1_760_000_000_000;
+  Date.now = () => fakeNow;
+  try {
+    const s = session();
+    s.turnDateByKey = { 'r-scan-dated': '2026-10-18' };
+    const h = harness(s);
+    const api = h.sandbox.__AGContextMeter;
+
+    // Poll 1: 3 turns (turn 0 via cm.responseModel + explicit dateKey, turn 1 via scanned turnDateByKey, turn 2 on Nov promo date)
+    h.pending[0].resolve({
+      ok: true,
+      json: async () => ({
+        generatorMetadata: [
+          {
+            dateKey: '2026-10-15',
+            chatModel: {
+              responseModel: 'MODEL_PLACEHOLDER_M528',
+              usage: { responseId: 'r-oct', inputTokens: 100000, cacheReadTokens: 0, outputTokens: 10000 },
+              chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+            }
+          },
+          {
+            chatModel: {
+              model: 'MODEL_PLACEHOLDER_M667',
+              usage: { responseId: 'r-scan-dated', inputTokens: 200000, cacheReadTokens: 0, outputTokens: 20000 }
+            }
+          },
+          {
+            chatModel: {
+              model: 'MODEL_PLACEHOLDER_M528',
+              createdAt: '2026-11-12',
+              usage: { responseId: 'r-nov', inputTokens: 100000, cacheReadTokens: 0, outputTokens: 10000 }
+            }
+          }
+        ]
+      })
+    });
+    await h.flush();
+    // Finish scan after poll so scan() also exercises turnDateByKey backfill
+    h.finishScan(0);
+    await h.flush();
+
+    const steps3 = api.getSessionStepsForTest();
+    assert.equal(steps3.length, 3);
+    assert.equal(steps3[0].rawModel, 'MODEL_PLACEHOLDER_M528');
+    assert.equal(steps3[0].dateKey, '2026-10-15');
+    assert.equal(steps3[1].dateKey, '2026-10-18');
+    assert.equal(steps3[2].dateKey, '2026-11-12');
+    assert.match(h.elements.get('sess-cost-meta-left').textContent, /^3 轮请求 · Orch-Carbon \d+% · Hydrogen \d+%$/);
+    const cost3 = parseFloat(h.elements.get('sess-cost-total').textContent.replace(/[^0-9.]/g, ''));
+
+    // Poll 2: User rewinds conversation back to turn 0 (and edits turn 0 -> new responseId 'r-oct-v2')
+    fakeNow += 10_000;
+    h.tick();
+    h.pending[1].resolve({
+      ok: true,
+      json: async () => ({
+        generatorMetadata: [
+          {
+            dateKey: '2026-10-15',
+            chatModel: {
+              responseModel: 'MODEL_PLACEHOLDER_M528',
+              usage: { responseId: 'r-oct-v2', inputTokens: 100000, cacheReadTokens: 0, outputTokens: 10000 },
+              chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+            }
+          }
+        ]
+      })
+    });
+    await h.flush();
+
+    const steps1 = api.getSessionStepsForTest();
+    assert.equal(steps1.length, 1);
+    assert.equal(steps1[0].key, 'r-oct-v2');
+    assert.match(h.elements.get('sess-cost-meta-left').textContent, /^1 轮请求 · Hydrogen 100%$/);
+    const cost1 = parseFloat(h.elements.get('sess-cost-total').textContent.replace(/[^0-9.]/g, ''));
+    // Hydrogen flat rate: 0.1M * $1.50 + 0.01M * $7.50 = $0.15 + $0.075 = $0.225 -> $0.23
+    assert.ok(cost1 < cost3, `expected rewound session cost (${cost1}) < 3-turn cost (${cost3})`);
+    assert.equal(h.elements.get('sess-cost-total').textContent, '≈ $0.23');
+
+    api.dispose();
+  } finally {
+    Date.now = origDateNow;
+  }
+});
+
+test('v3.0.0 P0-3, P0-4 & U4: WCO side-drawer guard & spacer cleanup, <1yr active-avg card swap, sparse date labels, viewport-clamped popover, keyboard tablist, and effW data-size', () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  h.sandbox.window.innerWidth = 1280;
+  h.sandbox.window.innerHeight = 800;
+
+  // 1) WCO guard rejects side drawer (top >= 20 or height > 48) and cleans up orphan #ag-wco-spacer
+  let orphanRemoved = false;
+  let activeSpacer = { id: 'ag-wco-spacer', remove() { orphanRemoved = true; activeSpacer = null; } };
+  let candidateRect = { left: 960, top: 40, right: 1280, bottom: 800, width: 320, height: 760 };
+  const candidateCluster = {
+    children: [],
+    style: {},
+    appendChild(x) { x.parentElement = candidateCluster; x.remove = () => { activeSpacer = null; }; this.children.push(x); activeSpacer = x; },
+    getBoundingClientRect: () => candidateRect
+  };
+  h.sandbox.document.getElementById = id => (id === 'ag-wco-spacer' ? activeSpacer : null);
+  h.sandbox.document.querySelector = sel => {
+    if (sel === '[data-testid="toggle-aux-sidebar"]') {
+      return { closest: () => candidateCluster, getBoundingClientRect: () => candidateRect };
+    }
+    return null;
+  };
+  api.syncWcoForTest();
+  assert.equal(orphanRemoved, true, 'orphan spacer must be removed when candidate is a side drawer');
+  assert.equal(candidateCluster.children.length, 0, 'side drawer must never receive #ag-wco-spacer');
+
+  // Real top-right toolbar cluster (top: 0, height: 36, right: 1280) receives spacer, then cleans up if shifted down (top: 35)
+  candidateRect = { left: 1100, top: 0, right: 1280, bottom: 36, width: 180, height: 36 };
+  api.syncWcoForTest();
+  assert.equal(candidateCluster.children.length, 1);
+  assert.ok(activeSpacer && activeSpacer.id === 'ag-wco-spacer');
+  candidateRect = { left: 1100, top: 35, right: 1280, bottom: 71, width: 180, height: 36 };
+  api.syncWcoForTest();
+  assert.equal(activeSpacer, null, 'spacer must be removed when toolbar shifts below top menu bar');
+
+  // 2) <1yr history swaps 4th stat card to '活跃日均'; >1yr history restores '年度使用'
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = String(now.getMonth() + 1).padStart(2, '0');
+  const firstThisYear = `${curY}-${curM}-01`;
+  const secondThisYear = `${curY}-${curM}-02`;
+  api.setTokenHistoryForTest({
+    firstTokenDate: firstThisYear,
+    dailyMap: {
+      [firstThisYear]: { total: 6000000, input: 1000000, output: 200000, cache: 4800000, steps: 10 },
+      [secondThisYear]: { total: 4000000, input: 800000, output: 200000, cache: 3000000, steps: 8 }
+    }
+  });
+  assert.equal(h.elements.get('t-year-lbl').textContent, '活跃日均');
+  assert.equal(h.elements.get('t-year-val').textContent, '5.0M');
+  assert.match(h.elements.get('t-year-cost').textContent, /\/天$/);
+
+  api.setTokenHistoryForTest({
+    firstTokenDate: `${curY - 1}-06-01`,
+    dailyMap: {
+      [`${curY - 1}-06-01`]: { total: 10000000, input: 2000000, output: 500000, cache: 7500000, steps: 20 },
+      [firstThisYear]: { total: 6000000, input: 1000000, output: 200000, cache: 4800000, steps: 10 }
+    }
+  });
+  assert.equal(h.elements.get('t-year-lbl').textContent, '年度使用');
+  assert.equal(h.elements.get('t-year-val').textContent, '6.0M');
+
+  // 3) Daily heatmap renders sparse date labels ONLY on 1st of month / firstUse / today, plus light lvl-3/4 white ink & yearly stroke CSS
+  assert.match(source, /:host\(\[data-theme="light"\]\)\s*\.heat-cell\.lvl-3\s+\.heat-cell-lbl[\s\S]*?color:#ffffff/);
+  assert.match(source, /var\(--ag-hairline-strong\)/);
+  api.setTokenHistoryForTest({
+    firstTokenDate: firstThisYear,
+    dailyMap: {
+      [firstThisYear]: { total: 65000000, input: 10000000, output: 2000000, cache: 53000000, steps: 50 },
+      [secondThisYear]: { total: 4000000, input: 800000, output: 200000, cache: 3000000, steps: 8 }
+    }
+  });
+  h.elements.get('badge-tokens').click();
+  const allDailyCells = h.elements.get('h-grid-cols').children.flatMap(col => col.children);
+  const labeledCells = allDailyCells.filter(c => c.children.length > 0);
+  const todayKey = `${curY}-${curM}-${String(now.getDate()).padStart(2, '0')}`;
+  for (const c of labeledCells) {
+    const dk = c.getAttribute('data-date');
+    assert.ok(dk.endsWith('-01') || dk === firstThisYear || dk === todayKey, `unexpected date label on ordinary cell ${dk}`);
+  }
+  const secondCell = allDailyCells.find(c => c.getAttribute('data-date') === secondThisYear);
+  if (secondThisYear !== todayKey) {
+    assert.equal(secondCell.children.length, 0, 'ordinary non-1st/non-firstUse/non-today cell has no noisy date label');
+  }
+
+  // 4) Keyboard WAI-ARIA tablist navigation on #h-tabs-wrap (ArrowRight / End / Home)
+  h.elements.get('h-tabs-wrap').trigger('keydown', { key: 'ArrowRight', preventDefault() {} });
+  assert.equal(api.getActiveHeatView(), 'weekly');
+  assert.equal(h.elements.get('h-tab-weekly').getAttribute('aria-selected'), 'true');
+  h.elements.get('h-tabs-wrap').trigger('keydown', { key: 'End', preventDefault() {} });
+  assert.equal(api.getActiveHeatView(), 'cum');
+  assert.equal(h.elements.get('h-tab-cum').getAttribute('aria-selected'), 'true');
+  h.elements.get('h-tabs-wrap').trigger('keydown', { key: 'Home', preventDefault() {} });
+  assert.equal(api.getActiveHeatView(), 'daily');
+
+  // 5) #heat-pop viewport clamping on left/top overflow and right-edge overflow
+  const pop = h.elements.get('heat-pop');
+  pop.getBoundingClientRect = () => ({ width: 210, height: 96 });
+  const cell0 = h.elements.get('h-grid-cols').children[0].children[0];
+  cell0.getBoundingClientRect = () => ({ left: 2, top: 4, right: 18, bottom: 20, width: 16, height: 16 });
+  cell0.click();
+  assert.equal(parseInt(pop.style.left, 10), 8);
+  assert.equal(parseInt(pop.style.top, 10), 28); // flipped below top-clipped cell (20 + 8)
+  cell0.getBoundingClientRect = () => ({ left: 1265, top: 200, right: 1279, bottom: 216, width: 14, height: 16 });
+  cell0.click();
+  assert.equal(parseInt(pop.style.left, 10), 1280 - 210 - 8);
+
+  // 6) Narrow split-view width (effW < 560) sets data-size="s" on #panel-tokens
+  h.sandbox.window.innerWidth = 500;
+  h.host.getBoundingClientRect = () => ({ left: 300, top: 6, right: 480, bottom: 34, width: 180, height: 28 });
+  api.repositionPanelsForTest();
+  assert.equal(h.elements.get('panel-tokens').getAttribute('data-size'), 's');
+
+  api.dispose();
+});
+
+test('v3.0.0 Hot-Reload & ARIA Regressions (#12): legacy v2.9 IPC unattributed models guard, 15s IPC suppression, scan() rawModel/tokenBreakdown preservation, and initial roving tabindex', async () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+
+  // 1) Initial roving tabindex="0" / "-1" on .heat-tab-btn (both HTML template and runtime before any click) + keyboard pricing toggle on #h-sum-cost-wrap
+  assert.match(source, /id="h-tab-daily"[^>]*aria-selected="true"\s+tabindex="0"/);
+  assert.match(source, /id="h-tab-weekly"[^>]*aria-selected="false"\s+tabindex="-1"/);
+  assert.equal(h.elements.get('h-tab-daily').getAttribute('tabindex'), '0');
+  assert.equal(h.elements.get('h-tab-weekly').getAttribute('tabindex'), '-1');
+  assert.equal(h.elements.get('h-tab-monthly').getAttribute('tabindex'), '-1');
+  assert.equal(h.elements.get('h-tab-yearly').getAttribute('tabindex'), '-1');
+  assert.equal(h.elements.get('h-tab-cum').getAttribute('tabindex'), '-1');
+  assert.equal(h.elements.get('h-sum-cost-wrap').getAttribute('role'), 'button');
+  assert.equal(h.elements.get('h-sum-cost-wrap').getAttribute('tabindex'), '0');
+  assert.equal(api.getPricingMode(), 'actual');
+  h.elements.get('h-sum-cost-wrap').trigger('keydown', { key: 'Enter', preventDefault() {} });
+  assert.equal(api.getPricingMode(), 'standard');
+  h.elements.get('h-sum-cost-wrap').trigger('keydown', { key: ' ', preventDefault() {} });
+  assert.equal(api.getPricingMode(), 'actual');
+
+  // 2) Hot-Reload Bug B: requestPoll() resolves with M528 Hydrogen + native tokenBreakdown, then un-restarted v2.9 scan() resolves later lacking rawModel/tokenBreakdown
+  h.pending[0].resolve(response({
+    responseModel: 'MODEL_PLACEHOLDER_M528',
+    usage: { responseId: 'r-h2', inputTokens: 20000, cacheReadTokens: 80000, outputTokens: 1000 },
+    chatStartMetadata: {
+      contextWindowMetadata: {
+        maxContextTokens: 256000,
+        tokenBreakdown: {
+          groups: [
+            { type: 'TOKEN_TYPE_SYSTEM_PROMPT', numTokens: 20000 },
+            { type: 'TOKEN_TYPE_TOOLS', numTokens: 30000 },
+            { type: 'TOKEN_TYPE_CHAT_MESSAGES', numTokens: 50000 }
+          ]
+        }
+      }
+    }
+  }));
+  await h.flush();
+  assert.equal(api.snapshot().latest.rawModel, 'MODEL_PLACEHOLDER_M528');
+  assert.equal(api.snapshot().latest.model, 'Gemini 4 Hydrogen (XHigh)');
+
+  // Simulate v2.9 main-process scan() finishing AFTER requestPoll with raw placeholder in .model and missing rawModel/tokenBreakdown
+  h.scans[0].resolve({
+    ok: true,
+    data: {
+      session: session(),
+      scannedAt: Date.now() + 60_000,
+      latest: {
+        used: 101000,
+        actual: 101000,
+        budget: 256000,
+        percent: (101000 / 256000) * 100,
+        exceeded: false,
+        error: '',
+        estimated: false,
+        input: 100000,
+        cached: 80000,
+        output: 1000,
+        model: 'MODEL_PLACEHOLDER_M528',
+        status: 'reported'
+      }
+    }
+  });
+  await h.flush();
+  assert.equal(api.snapshot().latest.rawModel, 'MODEL_PLACEHOLDER_M528');
+  assert.equal(api.snapshot().latest.model, 'Gemini 4 Hydrogen (XHigh)');
+  assert.equal(h.elements.get('model').textContent, 'Gemini 4 Hydrogen (XHigh)');
+  assert.equal(api.snapshot().latest.tokenBreakdown?.source, 'native');
+  assert.equal(h.elements.get('ctx-breakdown-text').textContent, '构成：对话 50% · 工具定义 30% · 系统指令 20%');
+
+  // 3) Hot-Reload Bug A: v3 history with Hydrogen models is NOT overwritten by v2.9 IPC payload containing polluted unattributed models, and 15s auto-IPC stops
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const rootId = '11111111-1111-1111-1111-111111111111';
+  api.setTokenHistoryForTest({
+    pricingSchemaVersion: 3,
+    firstTokenDate: todayStr,
+    summary: { rootSessionCount: 5, subagentSessionCount: 4 },
+    sessionRollups: {
+      [rootId]: { rootId, title: '主会话', childCount: 2, totalTokens: 40000000, totalCostUSD: 8.50, totalRetailCostUSD: 12.00 }
+    },
+    topSessions: [
+      { rootId, title: '主会话', childCount: 2, totalTokens: 40000000, totalCostUSD: 8.50, totalRetailCostUSD: 12.00 }
+    ],
+    dailyMap: {
+      [todayStr]: {
+        total: 40000000,
+        input: 4000000,
+        output: 1000000,
+        cache: 35000000,
+        steps: 50,
+        models: {
+          'gemini-4-hydrogen': { input: 2800000, cache: 24500000, output: 700000, total: 28000000, steps: 35 },
+          'gemini-4-argon': { input: 1200000, cache: 10500000, output: 300000, total: 12000000, steps: 15 }
+        }
+      }
+    }
+  });
+
+  let ipcCalls = 0;
+  h.sandbox.window.contextMeterAPI.getTokenHistory = async () => {
+    ipcCalls += 1;
+    // Un-restarted v2.9 IPC returns pricingSchemaVersion: 2, NO sessionRollups, polluted unattributed: 27.6M + shrunk Hydrogen, and +1M new tokens today
+    return {
+      ok: true,
+      data: {
+        pricingSchemaVersion: 2,
+        firstTokenDate: todayStr,
+        summary: { totalConversations: 9 },
+        dailyMap: {
+          [todayStr]: {
+            total: 41000000,
+            input: 4200000,
+            output: 1050000,
+            cache: 35750000,
+            steps: 51,
+            models: {
+              unattributed: { input: 2800000, cache: 24100000, output: 700000, total: 27600000, steps: 34 },
+              'gemini-4-hydrogen': { input: 200000, cache: 1150000, output: 50000, total: 1400000, steps: 2 },
+              'gemini-4-argon': { input: 1200000, cache: 10500000, output: 300000, total: 12000000, steps: 15 }
+            }
+          }
+        }
+      }
+    };
+  };
+
+  await api.syncTokenHistoryForTest(true);
+  assert.equal(ipcCalls, 1);
+  const snap = api.getTokenHistorySnapshotForTest();
+  assert.equal(snap.pricingSchemaVersion, 3);
+  assert.equal(snap.dailyMap[todayStr].models.unattributed, undefined, 'unattributed pollution from v2.9 IPC must be ignored');
+  // 28M preserved + 1M new today delta attributed to active Hydrogen (M528) = 29M
+  assert.equal(snap.dailyMap[todayStr].models['gemini-4-hydrogen'].total, 29000000);
+  assert.equal(snap.dailyMap[todayStr].models['gemini-4-argon'].total, 12000000);
+  assert.match(h.elements.get('cost-model-legend').textContent, /Hydrogen/);
+  assert.doesNotMatch(h.elements.get('cost-model-legend').textContent, /其余/);
+
+  // Subsequent automatic background syncs (force = false) are skipped once legacy v2.9 IPC is detected
+  await api.syncTokenHistoryForTest(false);
+  await api.syncTokenHistoryForTest(false);
+  assert.equal(ipcCalls, 1, 'automatic force=false background IPC calls must stop once legacy IPC is detected');
+
+  // Explicit forced sync (force = true) still runs when requested
+  await api.syncTokenHistoryForTest(true);
+  assert.equal(ipcCalls, 2);
+
+  api.dispose();
+});
+
+
 
 
 

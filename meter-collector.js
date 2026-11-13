@@ -5,7 +5,7 @@ const path = require('path');
 const https = require('https');
 const { fileURLToPath } = require('url');
 const { spawn, spawnSync } = require('child_process');
-const { analyzeSteps, summarize, add, empty, measure, normalizeModelFamily } = require('./meter-core');
+const { analyzeSteps, summarize, add, empty, measure, normalizeModelFamily, calculateTurnCost } = require('./meter-core');
 
 let cachedPython = undefined;
 function resolvePython() {
@@ -189,8 +189,12 @@ async function collect(origin, id, options = {}) {
   if (options.force) filesCache.clear();
   if (!options.force && previous?.result && Date.now() - previous.at < 12000) return previous.result;
   const task = (async () => {
-    const html = await request(origin);
-    const token = JSON.parse(html.match(/window.__APP_CONFIG__ = (.*?);/)[1]).csrfToken;
+    const hostMeta = await fetchHostUserMeta(origin, options.force === true);
+    let token = hostMeta?.csrfToken || '';
+    if (!token) {
+      const html = await request(origin);
+      token = JSON.parse(html.match(/window.__APP_CONFIG__ = (.*?);/)[1]).csrfToken;
+    }
     const call = (method, body) => request(origin, method, body, token);
     const full = await call('GetCascadeTrajectory', { cascadeId: id, trajectoryVerbosity: 3 });
     const trajectory = full.trajectory;
@@ -209,19 +213,60 @@ async function collect(origin, id, options = {}) {
     const total = add({ ...session.total }, attachmentTotal);
     let latest = null;
     const count = Number(full.numTotalGeneratorMetadata ?? trajectory.generatorMetadata?.length ?? 0);
-    const tail = await call('GetCascadeTrajectoryGeneratorMetadata', { cascadeId: id, generatorMetadataOffset: Math.max(0, count - 3), includeMessages: false });
+    const tailOffset = Math.max(0, count - 3);
+    const tail = await call('GetCascadeTrajectoryGeneratorMetadata', { cascadeId: id, generatorMetadataOffset: tailOffset, includeMessages: false });
+    if (session.compactionCount > 0 && session.lastCompactionFreedTokens <= 0 && count > 1) {
+      try {
+        const cpOffset = session.preCheckpointMetadataIdx >= 0
+          ? Math.max(0, session.preCheckpointMetadataIdx - 1)
+          : 0;
+        const cpRes = cpOffset === tailOffset
+          ? tail
+          : await call('GetCascadeTrajectoryGeneratorMetadata', { cascadeId: id, generatorMetadataOffset: cpOffset, includeMessages: false });
+        const gmSlice = Array.isArray(cpRes?.generatorMetadata) ? cpRes.generatorMetadata : [];
+        let beforePrompt = 0;
+        let afterPrompt = 0;
+        for (const gm of gmSlice) {
+          const cm = gm?.chatModel;
+          if (!cm) continue;
+          const u = (Array.isArray(cm.retryInfos) && cm.retryInfos.length > 0 && cm.retryInfos[cm.retryInfos.length - 1]?.usage)
+            ? cm.retryInfos[cm.retryInfos.length - 1].usage
+            : cm.usage;
+          const pt = (Math.max(0, Number(u?.inputTokens) || 0)) + (Math.max(0, Number(u?.cacheReadTokens) || 0));
+          if (pt <= 0) continue;
+          const indices = Array.isArray(gm.stepIndices) && gm.stepIndices.length > 0
+            ? gm.stepIndices.map(Number).filter(Number.isFinite)
+            : [];
+          const refStep = indices.length > 0 ? Math.max(...indices) : Number(cm.chatStartMetadata?.startStepIndex);
+          if (!Number.isFinite(refStep)) continue;
+          if (refStep <= session.lastCheckpointStepIdx) {
+            beforePrompt = pt;
+          } else if (afterPrompt <= 0 && refStep > session.lastCheckpointStepIdx) {
+            afterPrompt = pt;
+            break;
+          }
+        }
+        if (beforePrompt > 0 && afterPrompt > 0 && beforePrompt > afterPrompt) {
+          session.lastCompactionFreedTokens = beforePrompt - afterPrompt;
+        }
+      } catch {}
+    }
     let latestModel = null;
     for (const m of (tail.generatorMetadata || []).slice().reverse()) { latest = summarize(m, { cascadeModelConfigs: cachedHostMeta.cascadeModelConfigs }); if (latest) { latestModel = m.chatModel; break; } }
     const system = latestModel ? measure((latestModel.promptSections || []).map(p => p.content || '').join('\n') || latestModel.systemPrompt || '') : empty();
     const definitions = latestModel ? measure(JSON.stringify(latestModel.tools || [])) : empty();
     session.groups.system = system; session.groups.definitions = definitions;
+    if (session.activeBreakdown) {
+      session.activeBreakdown.systemTokens = Math.round(((system.low || 0) + (system.high || 0)) / 2);
+      session.activeBreakdown.toolDefTokens = Math.round(((definitions.low || 0) + (definitions.high || 0)) / 2);
+    }
     add(total, system); add(total, definitions);
     if (session.currentError) {
-      const fromStep = summarize({ chatModel: { retryInfos: [{ error: session.currentError.text }] } });
-      if (fromStep?.error) latest = { ...(latest || {}), error: fromStep.error, exceeded: fromStep.exceeded, serviceLimit: fromStep.serviceLimit || latest?.serviceLimit || null, status: fromStep.status, actual: null, percent: null, estimated: true };
+      const fromStep = summarize({ chatModel: { retryInfos: [{ error: session.currentError.text }] } }, { previousValidContext: latest, cascadeModelConfigs: cachedHostMeta.cascadeModelConfigs });
+      if (fromStep?.error) latest = { ...(latest || {}), error: fromStep.error, errorClassification: fromStep.errorClassification, exceeded: fromStep.exceeded, serviceLimit: fromStep.serviceLimit || latest?.serviceLimit || null, status: fromStep.status, actual: fromStep.actual, percent: fromStep.percent, estimated: fromStep.estimated };
     }
     const unknownFiles = attachments.filter(a => a.status !== 'parsed').length;
-    const result = { version: '2.2.0', conversation: id, latest, session: { ...session, media: undefined, attachmentTotal, total, attachments, unknownFiles, complete: unknownFiles === 0, scope: '全量可读取历史 + 上传附件 + 当前系统提示与工具定义；不将每轮重复输入累加；非服务端分词结果' }, scannedAt: Date.now(), errors: [] };
+    const result = { version: '3.0.0', conversation: id, latest, session: { ...session, media: undefined, attachmentTotal, total, attachments, unknownFiles, complete: unknownFiles === 0, scope: '全量可读取历史 + 上传附件 + 当前系统提示与工具定义；不将每轮重复输入累加；非服务端分词结果' }, scannedAt: Date.now(), errors: [] };
     conversations.set(key, { result, at: Date.now() });
     return result;
   })();
@@ -357,7 +402,54 @@ function resolveStepDateKey(stepIndices, startStepIndex, stepDatePairs, fallback
   return fallbackDateKey;
 }
 
-const MODEL_ATTR_SCHEMA_VERSION = 2;
+const MODEL_ATTR_SCHEMA_VERSION = 3;
+let cachedTrajectoryIndex = { origin: '', at: 0, titles: {}, parentMap: {}, sideQuestions: {} };
+
+function cleanUserPromptSnippet(rawText) {
+  if (!rawText || typeof rawText !== 'string') return '';
+  let text = rawText;
+  const reqMatch = text.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/i);
+  if (reqMatch) {
+    text = reqMatch[1];
+  } else {
+    text = text
+      .replace(/<CONTEXT_SUMMARY>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, ' ')
+      .replace(/<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|SYSTEM_MESSAGE)>[\s\S]*$/i, ' ')
+      .replace(/<[^>]+>/g, ' ');
+  }
+  text = text
+    .replace(/https?:\/\/[^\s)]+/g, m => {
+      try {
+        const u = new URL(m);
+        const tail = u.pathname.split('/').filter(Boolean).slice(-2).join('/');
+        return tail || u.hostname;
+      } catch {
+        return '';
+      }
+    })
+    .replace(/^[#>*\-\s`]+/gm, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+}
+
+function extractFirstUserPromptFromLine(line) {
+  if (!line || (!line.includes('USER_INPUT') && !line.includes('userInput'))) return '';
+  try {
+    const obj = JSON.parse(line);
+    if (!obj || typeof obj !== 'object') return '';
+    const t = String(obj.type || obj.stepType || '');
+    if (t && t !== 'USER_INPUT' && t !== 'CORTEX_STEP_TYPE_USER_INPUT' && !obj.userInput) return '';
+    const raw = obj.content ||
+      obj.userInput?.userResponse ||
+      (Array.isArray(obj.userInput?.items) ? obj.userInput.items.map(x => x?.text || '').join(' ') : '') ||
+      '';
+    return cleanUserPromptSnippet(String(raw));
+  } catch {
+    return '';
+  }
+}
 
 function matchPlannerStepsDates(usageTuples, plannerSteps, stepDates, fallbackDateKey) {
   const results = new Array(usageTuples.length);
@@ -403,24 +495,74 @@ function matchPlannerStepsDates(usageTuples, plannerSteps, stepDates, fallbackDa
   return results;
 }
 
-function loadModelAttributionDiskCache(attrPath) {
+function emptyTrajectoryMeta() {
+  return { titles: {}, parentMap: {}, sideQuestions: {} };
+}
+
+function loadModelAttributionDiskCache(attrPath, legacyAttrPath = '') {
   try {
-    if (!fs.existsSync(attrPath)) {
-      return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+    if (attrPath && fs.existsSync(attrPath)) {
+      const rawV3 = JSON.parse(fs.readFileSync(attrPath, 'utf8'));
+      if (rawV3 && typeof rawV3 === 'object' && rawV3.schemaVersion === MODEL_ATTR_SCHEMA_VERSION) {
+        const tm = rawV3.trajectoryMeta && typeof rawV3.trajectoryMeta === 'object' ? rawV3.trajectoryMeta : {};
+        return {
+          schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+          userTier: rawV3.userTier || null,
+          cascadeModelConfigs: Array.isArray(rawV3.cascadeModelConfigs) ? rawV3.cascadeModelConfigs : [],
+          conversations: (rawV3.conversations && typeof rawV3.conversations === 'object') ? rawV3.conversations : {},
+          trajectoryMeta: {
+            titles: (tm.titles && typeof tm.titles === 'object') ? tm.titles : {},
+            parentMap: (tm.parentMap && typeof tm.parentMap === 'object') ? tm.parentMap : {},
+            sideQuestions: (tm.sideQuestions && typeof tm.sideQuestions === 'object') ? tm.sideQuestions : {}
+          },
+          migratedFromV2: false
+        };
+      }
     }
-    const raw = JSON.parse(fs.readFileSync(attrPath, 'utf8'));
-    if (!raw || typeof raw !== 'object' || raw.schemaVersion !== MODEL_ATTR_SCHEMA_VERSION) {
-      return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+    if (legacyAttrPath && fs.existsSync(legacyAttrPath)) {
+      const rawV2 = JSON.parse(fs.readFileSync(legacyAttrPath, 'utf8'));
+      if (rawV2 && typeof rawV2 === 'object' && rawV2.schemaVersion === 2 && rawV2.conversations && typeof rawV2.conversations === 'object') {
+        const migratedConvs = {};
+        for (const [cid, entry] of Object.entries(rawV2.conversations)) {
+          if (!entry || typeof entry !== 'object') continue;
+          migratedConvs[cid] = {
+            tSize: Number(entry.tSize) || 0,
+            tMtime: Number(entry.tMtime) || 0,
+            items: Array.isArray(entry.items) ? entry.items : [],
+            needsV3Rescan: true
+          };
+        }
+        return {
+          schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+          userTier: rawV2.userTier || null,
+          cascadeModelConfigs: Array.isArray(rawV2.cascadeModelConfigs) ? rawV2.cascadeModelConfigs : [],
+          conversations: migratedConvs,
+          trajectoryMeta: emptyTrajectoryMeta(),
+          migratedFromV2: true
+        };
+      }
     }
-    return {
-      schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
-      userTier: raw.userTier || null,
-      cascadeModelConfigs: Array.isArray(raw.cascadeModelConfigs) ? raw.cascadeModelConfigs : [],
-      conversations: (raw.conversations && typeof raw.conversations === 'object') ? raw.conversations : {}
-    };
+    return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {}, trajectoryMeta: emptyTrajectoryMeta(), migratedFromV2: false };
   } catch {
-    return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {} };
+    return { schemaVersion: MODEL_ATTR_SCHEMA_VERSION, userTier: null, cascadeModelConfigs: [], conversations: {}, trajectoryMeta: emptyTrajectoryMeta(), migratedFromV2: false };
   }
+}
+
+function persistModelAttributionDiskCache(attrPath, attrCache) {
+  if (!attrPath || !attrCache) return;
+  atomicWriteJsonSync(attrPath, {
+    schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+    updatedAt: new Date().toISOString(),
+    userTier: attrCache.userTier || null,
+    cascadeModelConfigs: Array.isArray(attrCache.cascadeModelConfigs) ? attrCache.cascadeModelConfigs : [],
+    trajectoryMeta: attrCache.trajectoryMeta || emptyTrajectoryMeta(),
+    conversations: attrCache.conversations || {}
+  }, {
+    schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
+    userTier: attrCache.userTier || null,
+    trajectoryMeta: attrCache.trajectoryMeta || emptyTrajectoryMeta(),
+    conversations: attrCache.conversations || {}
+  });
 }
 
 function aggregateModelDailyFromAttrCache(attrCache) {
@@ -461,9 +603,9 @@ function aggregateModelDailyFromAttrCache(attrCache) {
   return dailyModels;
 }
 
-async function fetchHostUserMeta(origin) {
+async function fetchHostUserMeta(origin, force = false) {
   if (!origin || !/^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) return null;
-  if (cachedHostMeta.origin === origin && cachedHostMeta.csrfToken && Date.now() - cachedHostMeta.at < 300000) {
+  if (!force && cachedHostMeta.origin === origin && cachedHostMeta.csrfToken && Date.now() - cachedHostMeta.at < 60000) {
     return cachedHostMeta;
   }
   try {
@@ -483,7 +625,8 @@ async function fetchHostUserMeta(origin) {
       if (Array.isArray(cfgs) && cfgs.length > 0) {
         cascadeModelConfigs = cfgs.map(c => ({
           label: c.label || '',
-          modelId: c.modelOrAlias?.model || c.modelId || '',
+          modelId: c.modelId || c.modelOrAlias?.model || '',
+          placeholder: c.modelOrAlias?.model || '',
           alias: c.modelOrAlias?.alias || '',
           quotaInfo: c.quotaInfo || null
         }));
@@ -496,6 +639,48 @@ async function fetchHostUserMeta(origin) {
   }
 }
 
+async function fetchTrajectoryIndex(origin, token, force = false) {
+  if (!origin || !token) return null;
+  if (!force && cachedTrajectoryIndex.origin === origin && cachedTrajectoryIndex.at > 0 && Date.now() - cachedTrajectoryIndex.at < 60000) {
+    return cachedTrajectoryIndex;
+  }
+  try {
+    const res = await Promise.race([
+      request(origin, 'GetAllCascadeTrajectories', {}, token),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('GetAllCascadeTrajectories timeout')), 4000))
+    ]);
+    const mapObj = res?.trajectorySummaries || res?.trajectories;
+    if (!mapObj || typeof mapObj !== 'object') return null;
+    const titles = {};
+    const parentMap = {};
+    const sideQuestions = {};
+    for (const [cid, info] of Object.entries(mapObj)) {
+      if (!info || typeof info !== 'object') continue;
+      const rawTitle = String(info.annotations?.title || info.summary || '').trim();
+      if (rawTitle) titles[cid] = rawTitle;
+      const pId = String(info.trajectoryMetadata?.parentConversationId || '').trim();
+      const rId = String(info.trajectoryMetadata?.rootConversationId || '').trim();
+      if (pId && pId !== cid) parentMap[cid] = pId;
+      else if (rId && rId !== cid) parentMap[cid] = rId;
+      const sqs = info.annotations?.sideQuestionCascadeIds;
+      if (Array.isArray(sqs)) {
+        for (const sqId of sqs) {
+          const cleanSq = String(sqId || '').trim();
+          if (cleanSq && cleanSq !== cid) {
+            sideQuestions[cleanSq] = cid;
+            const sqTitle = String(info.annotations?.sideQuestionTitles?.[cleanSq] || '').trim();
+            if (sqTitle && !titles[cleanSq]) titles[cleanSq] = sqTitle;
+          }
+        }
+      }
+    }
+    cachedTrajectoryIndex = { origin, at: Date.now(), titles, parentMap, sideQuestions };
+    return cachedTrajectoryIndex;
+  } catch {
+    return cachedTrajectoryIndex.origin === origin && cachedTrajectoryIndex.at > 0 ? cachedTrajectoryIndex : null;
+  }
+}
+
 function scanLocalTranscriptsAndArchive(home) {
   const agDir = path.join(home, '.gemini', 'antigravity');
   const brainDir = path.join(agDir, 'brain');
@@ -504,7 +689,8 @@ function scanLocalTranscriptsAndArchive(home) {
   const legacyArchivePathV1 = path.join(agDir, 'token_usage_archive_v1.json');
   const readArchivePath = fs.existsSync(archivePathV3) ? archivePathV3 : legacyArchivePathV1;
   const archivePath = archivePathV3;
-  const attrPath = path.join(agDir, 'model_attribution_cache_v1.json');
+  const attrPath = path.join(agDir, 'model_attribution_cache_v3.json');
+  const legacyAttrPath = path.join(agDir, 'model_attribution_cache_v1.json');
 
   let archive = { schemaVersion: 0, firstUseDate: null, firstInstallDate: null, firstTokenDate: null, dailyMap: {}, maxConversations: 0 };
   try {
@@ -541,6 +727,7 @@ function scanLocalTranscriptsAndArchive(home) {
 
   // 1. Check conversations/*.pb timestamps (and optional CLI conversations) for earliest local installation/session
   let pbCount = 0;
+  const pbConvIds = new Set();
   const scanConvFolder = (dir) => {
     try {
       if (!fs.existsSync(dir)) return;
@@ -551,6 +738,8 @@ function scanLocalTranscriptsAndArchive(home) {
           const st = fs.statSync(p);
           if (st.isFile()) {
             pbCount++;
+            const stem = name.replace(/\.pb$/i, '');
+            if (stem) pbConvIds.add(stem);
             const ts = st.birthtimeMs && st.birthtimeMs > 946684800000 ? Math.min(st.birthtimeMs, st.mtimeMs) : st.mtimeMs;
             if (ts > 946684800000) registerInstallDate(formatLocalDateKey(new Date(ts)));
           }
@@ -563,9 +752,47 @@ function scanLocalTranscriptsAndArchive(home) {
     scanConvFolder(path.join(home, '.gemini', cliFolder, 'conversations'));
   }
 
-  // 2. Fast-walk brain/**/transcript.jsonl skipping heavy directories (steps, scratch, media, artifacts)
+  // 2. Fast-walk brain/**/transcript.jsonl + .system_generated/{subagents,swarm}
   const transcriptJobs = [];
   const visitedDirs = new Set();
+  const diskChildToParent = new Map();
+  const diskSwarmTitles = new Map();
+
+  const scanBrainAgentLinks = (convDirPath, parentId) => {
+    if (!parentId) return;
+    try {
+      const subDir = path.join(convDirPath, '.system_generated', 'subagents');
+      if (fs.existsSync(subDir)) {
+        for (const f of fs.readdirSync(subDir)) {
+          if (!f.endsWith('.json') || isCompanionTempFile(f)) continue;
+          try {
+            const raw = JSON.parse(fs.readFileSync(path.join(subDir, f), 'utf8'));
+            const cId = String(raw?.conversationId || '').trim();
+            if (cId && cId !== parentId) diskChildToParent.set(cId, parentId);
+          } catch {}
+        }
+      }
+    } catch {}
+    try {
+      const swarmPath = path.join(convDirPath, '.system_generated', 'swarm', 'members.json');
+      if (fs.existsSync(swarmPath)) {
+        const raw = JSON.parse(fs.readFileSync(swarmPath, 'utf8'));
+        if (raw && typeof raw === 'object') {
+          const sTitle = String(raw.title || '').trim();
+          if (sTitle) diskSwarmTitles.set(parentId, sTitle);
+          if (raw.members && typeof raw.members === 'object') {
+            for (const m of Object.values(raw.members)) {
+              const cId = String(m?.conversation_id || '').trim();
+              if (cId && cId !== parentId && m?.role !== 'coordinator') {
+                diskChildToParent.set(cId, parentId);
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  };
+
   const walkBrain = (dir, depth = 0, topConvId = null) => {
     if (depth > 4) return;
     try {
@@ -578,10 +805,9 @@ function scanLocalTranscriptsAndArchive(home) {
         if (TRANSCRIPT_SKIP_DIRS.has(entry.name)) continue;
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          const convId = depth === 0 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.name)
-            ? entry.name
-            : topConvId;
+          const convId = depth === 0 ? entry.name : topConvId;
           if (depth === 0) {
+            scanBrainAgentLinks(fullPath, convId);
             const stdLog = path.join(fullPath, '.system_generated', 'logs', 'transcript.jsonl');
             const directLog = path.join(fullPath, 'transcript.jsonl');
             let matchedFast = false;
@@ -609,6 +835,7 @@ function scanLocalTranscriptsAndArchive(home) {
   }
 
   const convTranscriptMeta = new Map();
+  const transcriptConvIds = new Set();
   const scannedDaily = {};
   for (const job of transcriptJobs) {
     const file = job.file;
@@ -619,21 +846,28 @@ function scanLocalTranscriptsAndArchive(home) {
       let plannerSteps;
       let stepDates;
       let fallbackDateKey;
-      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs) {
+      let firstPrompt;
+      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs && cached.firstPrompt !== undefined) {
         fileDaily = cached.daily;
         plannerSteps = cached.plannerSteps;
         stepDates = cached.stepDates;
         fallbackDateKey = cached.fallbackDateKey;
+        firstPrompt = cached.firstPrompt;
       } else {
         fileDaily = {};
         plannerSteps = [];
         stepDates = [];
         fallbackDateKey = formatLocalDateKey(new Date(st.mtimeMs));
+        firstPrompt = '';
         const content = fs.readFileSync(file, 'utf8');
         const lines = content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           if (!line) continue;
+          if (!firstPrompt) {
+            const fp = extractFirstUserPromptFromLine(line);
+            if (fp) firstPrompt = fp;
+          }
           if (job.convId) {
             const sd = extractLineStepDate(line);
             if (sd && sd.dateKey) {
@@ -670,10 +904,12 @@ function scanLocalTranscriptsAndArchive(home) {
           daily: fileDaily,
           plannerSteps,
           stepDates,
-          fallbackDateKey
+          fallbackDateKey,
+          firstPrompt
         });
       }
       if (job.convId) {
+        transcriptConvIds.add(job.convId);
         const existing = convTranscriptMeta.get(job.convId);
         if (existing) {
           existing.size += st.size;
@@ -681,13 +917,15 @@ function scanLocalTranscriptsAndArchive(home) {
           existing.plannerSteps.push(...plannerSteps);
           existing.stepDates.push(...stepDates);
           existing.fallbackDateKey = fallbackDateKey;
+          if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
         } else {
           convTranscriptMeta.set(job.convId, {
             size: st.size,
             mtimeMs: Math.round(st.mtimeMs),
             plannerSteps: plannerSteps.slice(),
             stepDates: stepDates.slice(),
-            fallbackDateKey
+            fallbackDateKey,
+            firstPrompt: firstPrompt || ''
           });
         }
       }
@@ -709,13 +947,310 @@ function scanLocalTranscriptsAndArchive(home) {
     agDir,
     archivePath,
     attrPath,
+    legacyAttrPath,
     archive,
     getEarliestInstallDate: () => earliestInstallDate,
     registerInstallDate,
     pbCount,
+    pbConvIds,
     transcriptCount: transcriptJobs.length,
+    transcriptConvIds,
+    diskChildToParent,
+    diskSwarmTitles,
     scannedDaily,
     convTranscriptMeta
+  };
+}
+
+function buildSessionHierarchyAndRollups(scanCtx, attrCache) {
+  const configs = attrCache?.cascadeModelConfigs || [];
+  const trajMeta = attrCache?.trajectoryMeta || emptyTrajectoryMeta();
+
+  const parentMap = new Map();
+  if (trajMeta.parentMap && typeof trajMeta.parentMap === 'object') {
+    for (const [cId, pId] of Object.entries(trajMeta.parentMap)) {
+      if (cId && pId && cId !== pId) parentMap.set(cId, pId);
+    }
+  }
+  if (trajMeta.sideQuestions && typeof trajMeta.sideQuestions === 'object') {
+    for (const [sqId, pId] of Object.entries(trajMeta.sideQuestions)) {
+      if (sqId && pId && sqId !== pId) parentMap.set(sqId, pId);
+    }
+  }
+  for (const [cId, pId] of scanCtx.diskChildToParent.entries()) {
+    if (cId && pId && cId !== pId) parentMap.set(cId, pId);
+  }
+
+  const childToRoot = {};
+  const resolveRoot = (id) => {
+    let curr = id;
+    const seen = new Set([curr]);
+    let depth = 0;
+    while (parentMap.has(curr) && depth < 16) {
+      const next = parentMap.get(curr);
+      if (!next || seen.has(next)) break;
+      seen.add(next);
+      curr = next;
+      depth++;
+    }
+    return curr;
+  };
+  for (const childId of parentMap.keys()) {
+    const rootId = resolveRoot(childId);
+    if (rootId && rootId !== childId) {
+      childToRoot[childId] = rootId;
+    }
+  }
+
+  const convStats = new Map();
+  const candidateIds = new Set([
+    ...scanCtx.convTranscriptMeta.keys(),
+    ...Object.keys(attrCache?.conversations || {})
+  ]);
+
+  for (const convId of candidateIds) {
+    const attrEntry = attrCache?.conversations?.[convId];
+    const attrItems = Array.isArray(attrEntry?.items) ? attrEntry.items : [];
+    const tMeta = scanCtx.convTranscriptMeta.get(convId);
+    let tokens = 0, netTokens = 0, costUSD = 0, retailCostUSD = 0, cacheSavedUSD = 0, retailCacheSavedUSD = 0;
+    let lastActiveDate = '';
+    const modelBuckets = new Map();
+
+    const addTurn = (rawModel, dateKey, inp, cac, out) => {
+      const tot = inp + cac + out;
+      if (tot <= 0) return;
+      const act = calculateTurnCost({ rawModel, input: inp, cache: cac, output: out, dateKey }, { pricingMode: 'actual', cascadeModelConfigs: configs });
+      const ret = calculateTurnCost({ rawModel, input: inp, cache: cac, output: out, dateKey }, { pricingMode: 'standard', cascadeModelConfigs: configs });
+      tokens += tot;
+      netTokens += inp + out;
+      costUSD += act.costUSD;
+      retailCostUSD += ret.costUSD;
+      cacheSavedUSD += act.cacheSavedUSD;
+      retailCacheSavedUSD += ret.cacheSavedUSD;
+      if (dateKey && dateKey > lastActiveDate) lastActiveDate = dateKey;
+
+      let mb = modelBuckets.get(act.modelKey);
+      if (!mb) {
+        mb = {
+          modelKey: act.modelKey,
+          label: act.label,
+          shortLabel: act.shortLabel,
+          color: act.color,
+          tokens: 0,
+          turns: 0,
+          costUSD: 0,
+          retailCostUSD: 0
+        };
+        modelBuckets.set(act.modelKey, mb);
+      }
+      mb.tokens += tot;
+      mb.turns += 1;
+      mb.costUSD += act.costUSD;
+      mb.retailCostUSD += ret.costUSD;
+    };
+
+    if (attrItems.length > 0) {
+      const seenRids = new Set();
+      for (let i = 0; i < attrItems.length; i++) {
+        const it = attrItems[i];
+        if (!Array.isArray(it) || it.length < 6) continue;
+        const [rid, rawOrKey, dateKey, inpRaw, cacRaw, outRaw] = it;
+        const dedup = rid || `${convId}:${i}:${dateKey}:${inpRaw}:${outRaw}`;
+        if (seenRids.has(dedup)) continue;
+        seenRids.add(dedup);
+        addTurn(rawOrKey, dateKey, Math.max(0, Number(inpRaw) || 0), Math.max(0, Number(cacRaw) || 0), Math.max(0, Number(outRaw) || 0));
+      }
+    } else if (tMeta && Array.isArray(tMeta.plannerSteps) && tMeta.plannerSteps.length > 0) {
+      for (const ps of tMeta.plannerSteps) {
+        if (!Array.isArray(ps) || ps.length < 4) continue;
+        addTurn('unattributed', ps[3], Math.max(0, Number(ps[0]) || 0), Math.max(0, Number(ps[1]) || 0), Math.max(0, Number(ps[2]) || 0));
+      }
+    }
+
+    if (tokens > 0) {
+      convStats.set(convId, {
+        tokens,
+        netTokens,
+        costUSD,
+        retailCostUSD,
+        cacheSavedUSD,
+        retailCacheSavedUSD,
+        lastActiveDate: lastActiveDate || tMeta?.fallbackDateKey || '',
+        modelBuckets
+      });
+    }
+  }
+
+  const rollupMap = new Map();
+  const ensureRollup = (rootId) => {
+    let r = rollupMap.get(rootId);
+    if (!r) {
+      r = {
+        rootId,
+        ownTokens: 0,
+        ownNetTokens: 0,
+        ownCostUSD: 0,
+        ownRetailCostUSD: 0,
+        childIds: new Set(),
+        childTokens: 0,
+        childNetTokens: 0,
+        childCostUSD: 0,
+        childRetailCostUSD: 0,
+        cacheSavedUSD: 0,
+        retailCacheSavedUSD: 0,
+        lastActiveDate: '',
+        modelBuckets: new Map()
+      };
+      rollupMap.set(rootId, r);
+    }
+    return r;
+  };
+
+  for (const [convId, st] of convStats.entries()) {
+    const rootId = childToRoot[convId] || convId;
+    const r = ensureRollup(rootId);
+    if (convId === rootId) {
+      r.ownTokens += st.tokens;
+      r.ownNetTokens += st.netTokens;
+      r.ownCostUSD += st.costUSD;
+      r.ownRetailCostUSD += st.retailCostUSD;
+    } else {
+      r.childIds.add(convId);
+      r.childTokens += st.tokens;
+      r.childNetTokens += st.netTokens;
+      r.childCostUSD += st.costUSD;
+      r.childRetailCostUSD += st.retailCostUSD;
+    }
+    r.cacheSavedUSD += st.cacheSavedUSD;
+    r.retailCacheSavedUSD += st.retailCacheSavedUSD;
+    if (st.lastActiveDate && st.lastActiveDate > r.lastActiveDate) r.lastActiveDate = st.lastActiveDate;
+    for (const [mk, mb] of st.modelBuckets.entries()) {
+      let dst = r.modelBuckets.get(mk);
+      if (!dst) {
+        dst = { ...mb, tokens: 0, turns: 0, costUSD: 0, retailCostUSD: 0 };
+        r.modelBuckets.set(mk, dst);
+      }
+      dst.tokens += mb.tokens;
+      dst.turns += mb.turns;
+      dst.costUSD += mb.costUSD;
+      dst.retailCostUSD += mb.retailCostUSD;
+    }
+  }
+
+  for (const [cId, rootId] of Object.entries(childToRoot)) {
+    if (scanCtx.convTranscriptMeta.has(cId) && rollupMap.has(rootId)) {
+      rollupMap.get(rootId).childIds.add(cId);
+    }
+  }
+
+  const resolveSessionTitle = (rootId, childIds) => {
+    const rpcTitle = String(trajMeta.titles?.[rootId] || '').trim();
+    if (rpcTitle) return rpcTitle;
+    const swarmTitle = String(scanCtx.diskSwarmTitles.get(rootId) || '').trim();
+    if (swarmTitle) return swarmTitle;
+    const rootPrompt = String(scanCtx.convTranscriptMeta.get(rootId)?.firstPrompt || '').trim();
+    if (rootPrompt) return rootPrompt;
+    for (const cId of childIds) {
+      const cp = String(scanCtx.convTranscriptMeta.get(cId)?.firstPrompt || '').trim();
+      if (cp) return cp;
+    }
+    return `会话 #${String(rootId).slice(0, 6)}`;
+  };
+
+  const sessionRollups = {};
+  for (const [rootId, r] of rollupMap.entries()) {
+    const totalTokens = r.ownTokens + r.childTokens;
+    if (totalTokens <= 0) continue;
+    const netTokens = r.ownNetTokens + r.childNetTokens;
+    const totalCost = r.ownCostUSD + r.childCostUSD;
+    const totalRetailCost = r.ownRetailCostUSD + r.childRetailCostUSD;
+    const models = Array.from(r.modelBuckets.values())
+      .sort((a, b) => b.costUSD - a.costUSD || b.tokens - a.tokens)
+      .map(m => ({
+        modelKey: m.modelKey,
+        label: m.label,
+        shortLabel: m.shortLabel,
+        color: m.color,
+        tokens: m.tokens,
+        turns: m.turns,
+        costUSD: Number(m.costUSD.toFixed(4)),
+        retailCostUSD: Number(m.retailCostUSD.toFixed(4)),
+        sharePct: totalCost > 0 ? Math.round((m.costUSD / totalCost) * 100) : Math.round((m.tokens / totalTokens) * 100),
+        retailSharePct: totalRetailCost > 0 ? Math.round((m.retailCostUSD / totalRetailCost) * 100) : Math.round((m.tokens / totalTokens) * 100)
+      }));
+
+    const ownCostRounded = Number(r.ownCostUSD.toFixed(4));
+    const childCostRounded = Number(r.childCostUSD.toFixed(4));
+    const totalCostRounded = Number((ownCostRounded + childCostRounded).toFixed(4));
+    const ownRetailRounded = Number(r.ownRetailCostUSD.toFixed(4));
+    const childRetailRounded = Number(r.childRetailCostUSD.toFixed(4));
+    const totalRetailRounded = Number((ownRetailRounded + childRetailRounded).toFixed(4));
+
+    sessionRollups[rootId] = {
+      rootId,
+      title: resolveSessionTitle(rootId, r.childIds),
+      ownTokens: r.ownTokens,
+      ownNetTokens: r.ownNetTokens,
+      ownCostUSD: ownCostRounded,
+      ownRetailCostUSD: ownRetailRounded,
+      childCount: r.childIds.size,
+      childTokens: r.childTokens,
+      childNetTokens: r.childNetTokens,
+      childCostUSD: childCostRounded,
+      childRetailCostUSD: childRetailRounded,
+      totalTokens,
+      netTokens,
+      totalCostUSD: totalCostRounded,
+      totalRetailCostUSD: totalRetailRounded,
+      cacheSavedUSD: Number(r.cacheSavedUSD.toFixed(4)),
+      retailCacheSavedUSD: Number(r.retailCacheSavedUSD.toFixed(4)),
+      models,
+      lastActiveDate: r.lastActiveDate
+    };
+  }
+
+  const topSessions = Object.values(sessionRollups)
+    .sort((a, b) => b.totalCostUSD - a.totalCostUSD || b.totalTokens - a.totalTokens)
+    .slice(0, 8)
+    .map(r => {
+      const dom = r.models && r.models.length > 0 ? r.models[0] : null;
+      return {
+        rootId: r.rootId,
+        title: r.title,
+        childCount: r.childCount,
+        totalTokens: r.totalTokens,
+        netTokens: r.netTokens,
+        totalCostUSD: r.totalCostUSD,
+        totalRetailCostUSD: r.totalRetailCostUSD,
+        topModel: dom ? (dom.shortLabel || dom.label || dom.modelKey) : '参考基准',
+        topModelKey: dom ? dom.modelKey : 'unattributed',
+        topModelColor: dom ? dom.color : '#71717a',
+        lastActiveDate: r.lastActiveDate
+      };
+    });
+
+  const knownSessionIds = new Set([
+    ...scanCtx.pbConvIds,
+    ...scanCtx.transcriptConvIds,
+    ...Object.keys(attrCache?.conversations || {}),
+    ...Object.keys(trajMeta.titles || {}),
+    ...Object.keys(childToRoot)
+  ]);
+  let subagentSessionCount = 0;
+  let directRootCount = 0;
+  for (const sid of knownSessionIds) {
+    if (!sid) continue;
+    if (childToRoot[sid]) subagentSessionCount++;
+    else directRootCount++;
+  }
+  const rootSessionCount = Math.max(directRootCount, Object.keys(sessionRollups).length);
+
+  return {
+    childToRoot,
+    sessionRollups,
+    topSessions,
+    rootSessionCount,
+    subagentSessionCount
   };
 }
 
@@ -758,27 +1293,62 @@ function finalizeTokenHistoryOutput(scanCtx, attrCache) {
     let mergedModels = undefined;
     if (newModels || oldModels) {
       mergedModels = {};
-      const mKeys = new Set([...Object.keys(oldModels || {}), ...Object.keys(newModels || {})]);
-      for (const mk of mKeys) {
-        const om = oldModels?.[mk];
-        const nm = newModels?.[mk];
-        if (om && nm) {
-          mergedModels[mk] = {
-            input: Math.max(om.input || 0, nm.input || 0),
-            cache: Math.max(om.cache || 0, nm.cache || 0),
-            output: Math.max(om.output || 0, nm.output || 0),
-            total: Math.max(om.total || 0, nm.total || 0),
-            steps: Math.max(om.steps || 0, nm.steps || 0)
+      const cleanOld = {};
+      let sumOldRec = 0;
+      if (oldModels) {
+        for (const [mk, mv] of Object.entries(oldModels)) {
+          if (mk === 'unattributed' || !mv || typeof mv !== 'object') continue;
+          const normMk = normalizeModelFamily(mk, attrCache?.cascadeModelConfigs) || mk;
+          if (normMk === 'unattributed') continue;
+          const tot = Number(mv.total) || ((Number(mv.input) || 0) + (Number(mv.cache) || 0) + (Number(mv.output) || 0));
+          if (tot <= 0) continue;
+          if (!cleanOld[normMk]) cleanOld[normMk] = { input: 0, cache: 0, output: 0, total: 0, steps: 0 };
+          cleanOld[normMk].input += Number(mv.input) || 0;
+          cleanOld[normMk].cache += Number(mv.cache) || 0;
+          cleanOld[normMk].output += Number(mv.output) || 0;
+          cleanOld[normMk].total += tot;
+          cleanOld[normMk].steps += Number(mv.steps) || 0;
+          sumOldRec += tot;
+        }
+      }
+
+      const cleanNew = {};
+      let sumNewRec = 0;
+      if (newModels) {
+        for (const [mk, mv] of Object.entries(newModels)) {
+          if (mk === 'unattributed' || !mv || typeof mv !== 'object') continue;
+          const tot = Number(mv.total) || ((Number(mv.input) || 0) + (Number(mv.cache) || 0) + (Number(mv.output) || 0));
+          if (tot <= 0) continue;
+          cleanNew[mk] = {
+            input: Number(mv.input) || 0,
+            cache: Number(mv.cache) || 0,
+            output: Number(mv.output) || 0,
+            total: tot,
+            steps: Number(mv.steps) || 0
           };
-        } else {
-          const src = nm || om;
-          mergedModels[mk] = {
-            input: Number(src.input) || 0,
-            cache: Number(src.cache) || 0,
-            output: Number(src.output) || 0,
-            total: Number(src.total) || 0,
-            steps: Number(src.steps) || 0
-          };
+          sumNewRec += tot;
+        }
+      }
+
+      if (sumNewRec > 0 && sumNewRec >= sumOldRec) {
+        mergedModels = cleanNew;
+      } else {
+        const mKeys = new Set([...Object.keys(cleanOld), ...Object.keys(cleanNew)]);
+        for (const mk of mKeys) {
+          const om = cleanOld[mk];
+          const nm = cleanNew[mk];
+          if (om && nm) {
+            mergedModels[mk] = {
+              input: Math.max(om.input || 0, nm.input || 0),
+              cache: Math.max(om.cache || 0, nm.cache || 0),
+              output: Math.max(om.output || 0, nm.output || 0),
+              total: Math.max(om.total || 0, nm.total || 0),
+              steps: Math.max(om.steps || 0, nm.steps || 0)
+            };
+          } else {
+            const src = nm || om;
+            mergedModels[mk] = { ...src };
+          }
         }
       }
 
@@ -855,6 +1425,7 @@ function finalizeTokenHistoryOutput(scanCtx, attrCache) {
   const todayNetTokens = todayInputTokens + todayOutputTokens;
   const todayCacheRatio = todayTokens > 0 ? Number(((todayCacheTokens / todayTokens) * 100).toFixed(1)) : 0;
   const totalConversations = Math.max(archive.maxConversations || 0, transcriptCount, pbCount);
+  const hierarchy = buildSessionHierarchyAndRollups(scanCtx, attrCache);
 
   const out = {
     pricingSchemaVersion: 3,
@@ -865,6 +1436,9 @@ function finalizeTokenHistoryOutput(scanCtx, attrCache) {
     userTier: attrCache?.userTier || null,
     cascadeModelConfigs: attrCache?.cascadeModelConfigs || [],
     hasModelAttribution: hasModels,
+    childToRoot: hierarchy.childToRoot,
+    sessionRollups: hierarchy.sessionRollups,
+    topSessions: hierarchy.topSessions,
     summary: {
       grandTotalTokens,
       totalInputTokens,
@@ -883,6 +1457,8 @@ function finalizeTokenHistoryOutput(scanCtx, attrCache) {
       yearTokens,
       totalSteps,
       totalConversations,
+      rootSessionCount: hierarchy.rootSessionCount,
+      subagentSessionCount: hierarchy.subagentSessionCount,
       firstUseDate: effectiveFirstUseDate,
       firstTokenDate,
       firstInstallDate: earliestInstallDate,
@@ -918,7 +1494,10 @@ function collectTokenHistory(options = {}) {
     return cachedTokenHistory;
   }
   const scanCtx = scanLocalTranscriptsAndArchive(home);
-  const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath);
+  const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath, scanCtx.legacyAttrPath);
+  if (attrCache.migratedFromV2 && !fs.existsSync(scanCtx.attrPath)) {
+    persistModelAttributionDiskCache(scanCtx.attrPath, attrCache);
+  }
   const out = finalizeTokenHistoryOutput(scanCtx, attrCache);
 
   cachedTokenHistory = out;
@@ -946,12 +1525,15 @@ async function collectTokenHistoryAsync(options = {}) {
 
   const run = (async () => {
     const scanCtx = scanLocalTranscriptsAndArchive(home);
-    const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath);
-    let attrDirty = false;
+    const attrCache = loadModelAttributionDiskCache(scanCtx.attrPath, scanCtx.legacyAttrPath);
+    let attrDirty = Boolean(attrCache.migratedFromV2 && !fs.existsSync(scanCtx.attrPath));
+    let liveRescanCompleted = false;
 
     if (origin && /^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) {
-      const hostMeta = await fetchHostUserMeta(origin);
+      const hostMeta = await fetchHostUserMeta(origin, options.force === true);
       if (hostMeta && hostMeta.csrfToken) {
+        const trajIndexPromise = fetchTrajectoryIndex(origin, hostMeta.csrfToken, options.force === true);
+
         if (hostMeta.userTier && JSON.stringify(attrCache.userTier) !== JSON.stringify(hostMeta.userTier)) {
           attrCache.userTier = hostMeta.userTier;
           attrDirty = true;
@@ -964,10 +1546,13 @@ async function collectTokenHistoryAsync(options = {}) {
         }
 
         const pendingConvs = [];
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         for (const [convId, tMeta] of scanCtx.convTranscriptMeta.entries()) {
+          if (!uuidRegex.test(convId)) continue;
           const prev = attrCache.conversations[convId];
           const needsRefresh = options.forceModelRescan === true ||
             !prev ||
+            prev.needsV3Rescan === true ||
             prev.tSize !== tMeta.size ||
             prev.tMtime !== tMeta.mtimeMs;
           if (needsRefresh) {
@@ -1000,7 +1585,7 @@ async function collectTokenHistoryAsync(options = {}) {
                 if (inp + cac + out <= 0) continue;
 
                 const rid = String(u.responseId || u.messageId || `${convId}:${r}:${(g.stepIndices || []).join(',')}:${inp}:${out}`);
-                const rawModel = String(cm.modelDisplayName || u.responseModel || u.model || cm.model || '');
+                const rawModel = String(cm.modelDisplayName || cm.responseModel || u.responseModel || u.model || cm.model || '');
                 const modelKey = normalizeModelFamily(rawModel, attrCache.cascadeModelConfigs) || rawModel || 'unattributed';
                 usageTuples.push({
                   rid,
@@ -1026,12 +1611,19 @@ async function collectTokenHistoryAsync(options = {}) {
               };
               attrDirty = true;
             } catch {
-              // If LanguageServer doesn't know an archived/purged trajectory, mark current mtime/size so we don't retry every 15s
-              if (!attrCache.conversations[convId]) {
+              const prev = attrCache.conversations[convId];
+              if (!prev) {
                 attrCache.conversations[convId] = {
                   tSize: tMeta.size,
                   tMtime: tMeta.mtimeMs,
                   items: []
+                };
+                attrDirty = true;
+              } else if (prev.needsV3Rescan) {
+                attrCache.conversations[convId] = {
+                  tSize: tMeta.size,
+                  tMtime: tMeta.mtimeMs,
+                  items: Array.isArray(prev.items) ? prev.items : []
                 };
                 attrDirty = true;
               }
@@ -1041,21 +1633,31 @@ async function collectTokenHistoryAsync(options = {}) {
             await new Promise(resolve => setImmediate(resolve));
           }
         }
+        liveRescanCompleted = true;
+
+        const trajIdx = await trajIndexPromise;
+        if (trajIdx) {
+          const mergedTitles = { ...(attrCache.trajectoryMeta?.titles || {}), ...trajIdx.titles };
+          const mergedParents = { ...(attrCache.trajectoryMeta?.parentMap || {}), ...trajIdx.parentMap };
+          const mergedSq = { ...(attrCache.trajectoryMeta?.sideQuestions || {}), ...trajIdx.sideQuestions };
+          const nextTrajMeta = { titles: mergedTitles, parentMap: mergedParents, sideQuestions: mergedSq };
+          if (JSON.stringify(attrCache.trajectoryMeta) !== JSON.stringify(nextTrajMeta)) {
+            attrCache.trajectoryMeta = nextTrajMeta;
+            attrDirty = true;
+          }
+        }
       }
     }
 
     if (attrDirty) {
-      atomicWriteJsonSync(scanCtx.attrPath, {
-        schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
-        updatedAt: new Date().toISOString(),
-        userTier: attrCache.userTier,
-        cascadeModelConfigs: attrCache.cascadeModelConfigs,
-        conversations: attrCache.conversations
-      }, {
-        schemaVersion: MODEL_ATTR_SCHEMA_VERSION,
-        userTier: attrCache.userTier,
-        conversations: attrCache.conversations
-      });
+      if (liveRescanCompleted) {
+        for (const entry of Object.values(attrCache.conversations)) {
+          if (entry && entry.needsV3Rescan) {
+            delete entry.needsV3Rescan;
+          }
+        }
+      }
+      persistModelAttributionDiskCache(scanCtx.attrPath, attrCache);
     }
 
     const out = finalizeTokenHistoryOutput(scanCtx, attrCache);
@@ -1074,4 +1676,4 @@ async function collectTokenHistoryAsync(options = {}) {
   }
 }
 
-module.exports = { collect, collectTokenHistory, collectTokenHistoryAsync, parsePlannerStepLine, scanFiles, pythonScan, resolvePython };
+module.exports = { collect, collectTokenHistory, collectTokenHistoryAsync, parsePlannerStepLine, scanFiles, pythonScan, resolvePython, MODEL_ATTR_SCHEMA_VERSION };

@@ -29,7 +29,13 @@
     MODEL_PLACEHOLDER_M403: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (Low)' },
     MODEL_PLACEHOLDER_M404: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (Medium)' },
     MODEL_PLACEHOLDER_M405: { family: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (High)' },
-    MODEL_OPENAI_GPT_OSS_120B_MEDIUM: { family: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)' }
+    MODEL_OPENAI_GPT_OSS_120B_MEDIUM: { family: 'gpt-oss-120b', label: 'GPT-OSS 120B (Medium)' },
+    MODEL_PLACEHOLDER_M525: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (High)' },
+    MODEL_PLACEHOLDER_M528: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (XHigh)' },
+    MODEL_PLACEHOLDER_M526: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Medium)' },
+    MODEL_PLACEHOLDER_M527: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Low)' },
+    MODEL_PLACEHOLDER_M667: { family: 'gemini-pro-orchestrator', label: 'Orchestrator (Carbon)' },
+    MODEL_PLACEHOLDER_M681: { family: 'gemini-pro-orchestrator-argon', label: 'Orchestrator (Argon)' }
   };
 
   // 官方公开 Developer API 费率目录（USD / 百万 Token；核对日期：2026-11）
@@ -45,6 +51,26 @@
       label: 'Gemini 4 Carbon',
       shortLabel: 'Carbon',
       color: '#e09f5a',
+      promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
+      standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'gemini-4-hydrogen': {
+      label: 'Gemini 4 Hydrogen',
+      shortLabel: 'Hydrogen',
+      color: '#38bdf8',
+      standard: { input: 1.50, cacheRead: 0.075, output: 7.50 }
+    },
+    'gemini-pro-orchestrator': {
+      label: 'Orchestrator (Carbon)',
+      shortLabel: 'Orch-Carbon',
+      color: '#d4a373',
+      promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
+      standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'gemini-pro-orchestrator-argon': {
+      label: 'Orchestrator (Argon)',
+      shortLabel: 'Orch-Argon',
+      color: '#c87d55',
       promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
       standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
     },
@@ -118,19 +144,25 @@
     if (!rawModel) return '';
     const trimmed = String(rawModel).trim();
     if (!trimmed) return '';
+    const upper = trimmed.toUpperCase();
+    const lower = trimmed.toLowerCase();
     if (Array.isArray(cascadeModelConfigs) && cascadeModelConfigs.length) {
-      const upper = trimmed.toUpperCase();
-      const lower = trimmed.toLowerCase();
       const matched = cascadeModelConfigs.find(c => {
-        const mId = String(c?.modelId || c?.modelOrAlias?.model || '').trim();
-        const alias = String(c?.modelOrAlias?.alias || '').trim();
+        const mId = String(c?.modelId || '').trim();
+        const phId = String(c?.placeholder || c?.modelOrAlias?.model || '').trim();
+        const alias = String(c?.alias || c?.modelOrAlias?.alias || '').trim();
         const lbl = String(c?.label || '').trim();
-        return (mId && mId.toUpperCase() === upper) || (alias && alias.toLowerCase() === lower) || (lbl && lbl.toLowerCase() === lower);
+        return (mId && mId.toLowerCase() === lower) ||
+          (phId && phId.toUpperCase() === upper) ||
+          (alias && alias.toLowerCase() === lower) ||
+          (lbl && lbl.toLowerCase() === lower);
       });
       if (matched?.label) return String(matched.label);
     }
-    const ph = PLACEHOLDER_MODEL_MAP[trimmed.toUpperCase()];
+    const ph = PLACEHOLDER_MODEL_MAP[upper];
     if (ph) return ph.label;
+    const cat = API_PRICING_CATALOG[lower];
+    if (cat && lower !== 'unattributed') return cat.label;
     return trimmed;
   }
 
@@ -138,16 +170,21 @@
     if (!rawModel) return null;
     const trimmed = String(rawModel).trim();
     if (!trimmed) return null;
-    if (Object.prototype.hasOwnProperty.call(API_PRICING_CATALOG, trimmed)) return trimmed;
+    const lowerTrimmed = trimmed.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(API_PRICING_CATALOG, lowerTrimmed)) return lowerTrimmed;
 
     const resolved = resolveModelDisplayLabel(trimmed, cascadeModelConfigs);
     const s = `${resolved} ${trimmed}`.toLowerCase();
+    const upper = trimmed.toUpperCase();
+    const ph = PLACEHOLDER_MODEL_MAP[upper];
 
-    const ph = PLACEHOLDER_MODEL_MAP[trimmed.toUpperCase()];
-    if (ph && !s.includes('carbon') && !s.includes('argon') && !s.includes('opus') && !s.includes('sonnet') && !s.includes('flash')) {
-      return ph.family;
+    if (s.includes('orchestrator-argon') || s.includes('orchestrator (argon)') || s.includes('orch-argon') || s.includes('orch (argon)') || upper === 'MODEL_PLACEHOLDER_M681') {
+      return 'gemini-pro-orchestrator-argon';
     }
-
+    if (s.includes('orchestrator') || s.includes('orch-carbon') || s.includes('orch (carbon)') || upper === 'MODEL_PLACEHOLDER_M667') {
+      return 'gemini-pro-orchestrator';
+    }
+    if (s.includes('hydrogen') || s.includes('gemini-4-hydrogen')) return 'gemini-4-hydrogen';
     if (s.includes('carbon') || s.includes('gemini-4-carbon')) return 'gemini-4-carbon';
     if (s.includes('argon') || s.includes('gemini-4-argon')) return 'gemini-4-argon';
     if (s.includes('flash-lite') || s.includes('3.5-flash-lite') || s.includes('3.5 flash-lite')) return 'gemini-3.5-flash-lite';
@@ -199,14 +236,16 @@
     const targetStr = String(modelIdOrName).toLowerCase();
 
     let matched = cascadeModelConfigs.find(c => {
-      const mId = String(c.modelId || c.modelOrAlias?.model || '').toLowerCase();
+      const mId = String(c.modelId || '').toLowerCase();
+      const phId = String(c.placeholder || c.modelOrAlias?.model || '').toLowerCase();
+      const alias = String(c.alias || c.modelOrAlias?.alias || '').toLowerCase();
       const lbl = String(c.label || '').toLowerCase();
-      return mId === targetStr || lbl === targetStr;
+      return (mId && mId === targetStr) || (phId && phId === targetStr) || (alias && alias === targetStr) || (lbl && lbl === targetStr);
     });
 
     if (!matched && poolKey !== 'unknown') {
       matched = cascadeModelConfigs.find(c => {
-        const cPool = getModelPoolKey(c.modelId || c.modelOrAlias?.model || c.label);
+        const cPool = getModelPoolKey(c.modelId || c.placeholder || c.modelOrAlias?.model || c.label);
         return cPool === poolKey;
       });
     }
@@ -215,19 +254,22 @@
 
     const qi = matched.quotaInfo || {};
     const poolNames = {
-      'gemini-4-carbon': 'Gemini 4 Carbon 配额池（周限额）',
-      'gemini-4-argon': 'Gemini 4 Argon 配额池（周限额）',
-      'gemini-3.8-flash': 'Gemini 3.8 Flash 配额池',
-      'claude-opus-5-5': 'Claude Opus 5.5 配额池',
-      'claude-sonnet-5-5': 'Claude Sonnet 5.5 配额池',
-      'gpt-oss-120b': 'GPT-OSS 120B 配额池'
+      'gemini-4-carbon': 'Gemini 4 Carbon 配额',
+      'gemini-4-argon': 'Gemini 4 Argon 配额',
+      'gemini-4-hydrogen': 'Gemini 4 Hydrogen 配额',
+      'gemini-pro-orchestrator': 'Orchestrator (Carbon) 配额',
+      'gemini-pro-orchestrator-argon': 'Orchestrator (Argon) 配额',
+      'gemini-3.8-flash': 'Gemini 3.8 Flash 配额',
+      'claude-opus-5-5': 'Claude Opus 5.5 配额',
+      'claude-sonnet-5-5': 'Claude Sonnet 5.5 配额',
+      'gpt-oss-120b': 'GPT-OSS 120B 配额'
     };
 
     return {
-      modelId: matched.modelId || matched.modelOrAlias?.model || '',
+      modelId: matched.modelId || matched.placeholder || matched.modelOrAlias?.model || '',
       label: matched.label || modelIdOrName,
       poolKey,
-      poolName: poolNames[poolKey] || (matched.label ? `${matched.label} 配额池` : '专属模型配额池'),
+      poolName: poolNames[poolKey] || (matched.label ? `${matched.label} 配额` : '专属模型配额'),
       remainingFraction: typeof qi.remainingFraction === 'number' ? qi.remainingFraction : null,
       resetTime: qi.resetTime || null
     };
@@ -424,12 +466,37 @@
     };
   }
 
+  function parseNativeTokenBreakdown(rawTb) {
+    if (!rawTb || typeof rawTb !== 'object' || !Array.isArray(rawTb.groups) || !rawTb.groups.length) {
+      return null;
+    }
+    let system = 0, tools = 0, messages = 0;
+    for (const g of rawTb.groups) {
+      if (!g || typeof g !== 'object') continue;
+      const n = Math.max(0, number(g.numTokens) || 0);
+      if (n <= 0) continue;
+      const t = String(g.type || g.name || '');
+      if (t === 'TOKEN_TYPE_SYSTEM_PROMPT' || /system[_\s-]*prompt/i.test(t)) {
+        system += n;
+      } else if (t === 'TOKEN_TYPE_TOOLS' || /^tools$/i.test(t)) {
+        tools += n;
+      } else {
+        messages += n;
+      }
+    }
+    const sum = system + tools + messages;
+    const total = Math.max(sum, number(rawTb.totalTokens) || 0);
+    if (total <= 0) return null;
+    return { system, tools, messages, total, source: 'native' };
+  }
+
   function summarize(metadata, options = {}) {
     const m = metadata?.chatModel;
     if (!m) return null;
     const lastRetry = (m.retryInfos || []).at(-1);
     const error = String(lastRetry?.error || m.error || '');
-    const rawModelStr = m.modelDisplayName || m.responseModel || m.usage?.responseModel || m.usage?.model || m.model || options.currentModel || '';
+    const prevContext = options.previousValidContext || null;
+    const rawModelStr = String(m.modelDisplayName || m.responseModel || m.usage?.responseModel || m.usage?.model || m.model || options.currentModel || prevContext?.rawModel || '');
     const model = resolveModelDisplayLabel(rawModelStr, options.cascadeModelConfigs);
 
     const classification = error ? classifyRequestError(error, {
@@ -447,7 +514,6 @@
     const thinking = number(usage?.thinkingOutputTokens), responseTokens = number(usage?.responseOutputTokens);
     const hasInput = (input || 0) + (cached || 0) > 0;
 
-    const prevContext = options.previousValidContext || null;
     let actual = hasInput && !error ? (input || 0) + (cached || 0) + (output || 0) : null;
     if (actual === null && prevContext && prevContext.actual != null && !exceeded) {
       actual = prevContext.actual;
@@ -458,6 +524,8 @@
     const rawBudget = number(context?.maxContextTokens);
     const estimate = (rawEstimate > 0 ? rawEstimate : null) ?? prevContext?.estimate ?? null;
     const budget = (rawBudget > 0 ? rawBudget : null) ?? prevContext?.budget ?? null;
+    const parsedTb = parseNativeTokenBreakdown(context?.tokenBreakdown);
+    const tokenBreakdown = parsedTb || (!exceeded && prevContext?.tokenBreakdown ? prevContext.tokenBreakdown : null);
 
     // 计算生成耗时与输出速度 (Tokens Per Second)
     const ttft = parseDurationSec(m.timeToFirstToken);
@@ -503,6 +571,8 @@
       output: output ?? null,
       percent: actual !== null && budget > 0 && !exceeded ? actual / budget * 100 : null,
       model,
+      rawModel: rawModelStr,
+      tokenBreakdown,
       status,
       speed
     };
@@ -957,11 +1027,131 @@
   }
   function add(a, b) { for (const k of ['chars', 'bytes', 'low', 'high']) a[k] += b[k] || 0; return a; }
   const empty = () => ({ chars: 0, bytes: 0, low: 0, high: 0 });
-  function analyzeSteps(steps) {
+  function extractStepDateKey(input) {
+    if (!input) return null;
+    let raw = null;
+    if (typeof input === 'string' || typeof input === 'number' || input instanceof Date) {
+      raw = input;
+    } else if (typeof input === 'object') {
+      raw = input.metadata?.createdAt || input.metadata?.created_at ||
+        input.createdAt || input.created_at || input.timestamp ||
+        input.metadata?.completedAt || input.metadata?.startedAt ||
+        input.chatModel?.chatStartMetadata?.createdAt || null;
+    }
+    if (!raw) return null;
+    if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    try {
+      const d = raw instanceof Date ? raw : new Date(raw);
+      if (Number.isNaN(d.getTime())) return null;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractStepUsageObj(s) {
+    if (!s || typeof s !== 'object') return null;
+    const retries = s.metadata?.retryInfos || s.metadata?.chatModel?.retryInfos || s.chatModel?.retryInfos;
+    if (Array.isArray(retries) && retries.length > 0 && retries[retries.length - 1]?.usage) {
+      return retries[retries.length - 1].usage;
+    }
+    return s.metadata?.chatModel?.usage || s.chatModel?.usage ||
+      s.metadata?.modelUsage || s.metadata?.tokenUsage || s.metadata?.token_usage ||
+      s.modelUsage || s.tokenUsage || s.token_usage || s.usage || null;
+  }
+
+  function extractStepPromptTokens(s) {
+    const u = extractStepUsageObj(s);
+    if (!u || typeof u !== 'object') return 0;
+    const inp = Math.max(0, number(u.inputTokens ?? u.input_tokens) || 0);
+    const cac = Math.max(0, number(u.cacheReadTokens ?? u.cache_read_tokens) || 0);
+    return inp + cac;
+  }
+
+  function midEstimateTokens(g) {
+    if (!g || typeof g !== 'object') return 0;
+    return Math.round(((Number(g.low) || 0) + (Number(g.high) || 0)) / 2);
+  }
+
+  function analyzeSteps(steps = [], options = {}) {
+    const list = Array.isArray(steps) ? steps : [];
     const groups = { user: empty(), assistant: empty(), thinking: empty(), tools: empty(), summaries: empty() };
+    const activeGroups = { user: empty(), assistant: empty(), thinking: empty(), tools: empty() };
     const media = new Map();
     let userMessages = 0, assistantMessages = 0, latestStepError = null, lastUserAt = -1, lastAssistantAt = -1;
     const skip = new Set(['metadata', 'userConfig', 'lastUserConfig', 'userAgentSpec', 'activeUserState', 'thinkingSignature', 'thumbnail', 'inlineData', 'media', 'modelUsage', 'tokenUsage', 'mendelExperimentIds']);
+
+    let compactionCount = 0;
+    let lastCheckpointIdx = -1;
+    let lastCheckpointStepIdx = -1;
+    let preCheckpointMetadataIdx = -1;
+    let cutStepIdx = -1;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      if (!s || typeof s !== 'object') continue;
+      const sIdx = number(s.metadata?.sourceTrajectoryStepInfo?.stepIndex ?? s.stepIndex ?? s.step_index) ?? i;
+      const mIdx = number(s.metadata?.sourceTrajectoryStepInfo?.metadataIndex);
+      const isCp = Boolean(s.checkpoint) || s.type === 'CHECKPOINT' || s.type === 'CORTEX_STEP_TYPE_CHECKPOINT';
+      if (isCp) {
+        compactionCount++;
+        lastCheckpointIdx = i;
+        const incEnd = number(s.checkpoint?.includedStepIndexEnd);
+        lastCheckpointStepIdx = incEnd !== null ? Math.max(sIdx, incEnd) : sIdx;
+        cutStepIdx = Math.max(cutStepIdx, i, incEnd !== null ? incEnd : i);
+      }
+    }
+    if (lastCheckpointIdx > 0) {
+      for (let j = lastCheckpointIdx - 1; j >= 0; j--) {
+        const mIdx = number(list[j]?.metadata?.sourceTrajectoryStepInfo?.metadataIndex);
+        if (mIdx !== null) {
+          preCheckpointMetadataIdx = mIdx;
+          break;
+        }
+      }
+    }
+
+    let lastCompactionFreedTokens = 0;
+    if (lastCheckpointIdx >= 0) {
+      let beforePrompt = 0;
+      for (let j = lastCheckpointIdx - 1; j >= 0; j--) {
+        const pt = extractStepPromptTokens(list[j]);
+        if (pt > 0) { beforePrompt = pt; break; }
+      }
+      if (beforePrompt <= 0) {
+        beforePrompt = extractStepPromptTokens(list[lastCheckpointIdx]);
+      }
+      let afterPrompt = 0;
+      for (let j = lastCheckpointIdx + 1; j < list.length; j++) {
+        const pt = extractStepPromptTokens(list[j]);
+        if (pt > 0) { afterPrompt = pt; break; }
+      }
+      if ((beforePrompt <= 0 || afterPrompt <= 0) && Array.isArray(options.generatorMetadata) && options.generatorMetadata.length > 0) {
+        for (const gm of options.generatorMetadata) {
+          const cm = gm?.chatModel;
+          if (!cm) continue;
+          const u = (Array.isArray(cm.retryInfos) && cm.retryInfos.length > 0 && cm.retryInfos[cm.retryInfos.length - 1]?.usage)
+            ? cm.retryInfos[cm.retryInfos.length - 1].usage
+            : cm.usage;
+          const pt = (Math.max(0, number(u?.inputTokens) || 0)) + (Math.max(0, number(u?.cacheReadTokens) || 0));
+          if (pt <= 0) continue;
+          const indices = Array.isArray(gm.stepIndices) && gm.stepIndices.length > 0
+            ? gm.stepIndices.map(Number).filter(Number.isFinite)
+            : [];
+          const refStep = indices.length > 0 ? Math.max(...indices) : number(cm.chatStartMetadata?.startStepIndex);
+          if (refStep === null) continue;
+          if (refStep <= lastCheckpointStepIdx) {
+            beforePrompt = pt;
+          } else if (afterPrompt <= 0 && refStep > lastCheckpointStepIdx) {
+            afterPrompt = pt;
+            break;
+          }
+        }
+      }
+      if (beforePrompt > 0 && afterPrompt > 0 && beforePrompt > afterPrompt) {
+        lastCompactionFreedTokens = beforePrompt - afterPrompt;
+      }
+    }
+
     function content(value) {
       if (typeof value === 'string') return value;
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -993,33 +1183,109 @@
       }
       for (const [key, v] of Object.entries(value)) if (!skip.has(key) || key === 'media') attachments(v, source, withinStep);
     }
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i];
+
+    const stepDates = [];
+    const turns = [];
+    const turnDateByKey = {};
+
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      if (!s || typeof s !== 'object') continue;
+      const inActiveWindow = i > cutStepIdx;
+      const stepIdx = number(s.metadata?.sourceTrajectoryStepInfo?.stepIndex ?? s.stepIndex ?? s.step_index) ?? i;
+      const metaIdx = number(s.metadata?.sourceTrajectoryStepInfo?.metadataIndex);
+      const dateKey = extractStepDateKey(s);
+      if (dateKey) {
+        stepDates.push({ stepIndex: stepIdx, metadataIndex: metaIdx, dateKey });
+        turnDateByKey[`step:${stepIdx}`] = dateKey;
+        if (metaIdx !== null) turnDateByKey[`meta:${metaIdx}`] = dateKey;
+      }
+
+      const uObj = extractStepUsageObj(s);
+      if (uObj || s.plannerResponse) {
+        const inp = Math.max(0, number(uObj?.inputTokens ?? uObj?.input_tokens) || 0);
+        const cac = Math.max(0, number(uObj?.cacheReadTokens ?? uObj?.cache_read_tokens) || 0);
+        const out = Math.max(0, number(uObj?.outputTokens ?? uObj?.output_tokens) || 0);
+        const responseId = String(uObj?.responseId || '');
+        const messageId = String(uObj?.messageId || '');
+        const rawModel = String(s.metadata?.generatorModel || uObj?.responseModel || uObj?.model || '');
+        if (dateKey) {
+          if (responseId) turnDateByKey[responseId] = dateKey;
+          if (messageId) turnDateByKey[messageId] = dateKey;
+        }
+        turns.push({
+          stepIndex: stepIdx,
+          metadataIndex: metaIdx,
+          responseId,
+          messageId,
+          rawModel,
+          input: inp,
+          cache: cac,
+          output: out,
+          dateKey: dateKey || null
+        });
+      }
+
+      const isCp = Boolean(s.checkpoint) || s.type === 'CHECKPOINT' || s.type === 'CORTEX_STEP_TYPE_CHECKPOINT';
       if (s.userInput) {
         userMessages++; lastUserAt = i;
         const u = s.userInput;
-        add(groups.user, measure(u.userResponse || (u.items || []).map(item => item.text || '').join('\n')));
+        const m = measure(u.userResponse || (u.items || []).map(item => item.text || '').join('\n'));
+        add(groups.user, m);
+        if (inActiveWindow) add(activeGroups.user, m);
         // Canonical media and item inline previews represent the same upload.
         attachments(u.media?.length ? u.media : u.items, 'user');
       } else if (s.plannerResponse) {
         assistantMessages++; lastAssistantAt = i;
-        add(groups.assistant, measure(s.plannerResponse.modifiedResponse || s.plannerResponse.response || ''));
-        add(groups.thinking, measure(s.plannerResponse.thinking || ''));
+        const mResp = measure(s.plannerResponse.modifiedResponse || s.plannerResponse.response || '');
+        const mThink = measure(s.plannerResponse.thinking || '');
+        add(groups.assistant, mResp);
+        add(groups.thinking, mThink);
+        if (inActiveWindow) {
+          add(activeGroups.assistant, mResp);
+          add(activeGroups.thinking, mThink);
+        }
         attachments(s.plannerResponse, 'assistant');
       } else if (s.errorMessage) {
         const e = s.errorMessage.error || {};
         latestStepError = { index: i, text: e.modelErrorMessage || e.shortError || e.fullError || '', id: e.errorId || '' };
-      } else if (s.checkpoint) {
-        add(groups.summaries, measure(s.checkpoint.sessionSummary || ''));
+      } else if (isCp) {
+        add(groups.summaries, measure(s.checkpoint?.sessionSummary || ''));
       } else {
         const payload = Object.fromEntries(Object.entries(s).filter(([k]) => !['type', 'status', 'metadata', 'error'].includes(k)));
-        add(groups.tools, measure(content(payload)));
+        const mTool = measure(content(payload));
+        add(groups.tools, mTool);
+        if (inActiveWindow) add(activeGroups.tools, mTool);
         attachments(payload, 'assistant');
       }
     }
     const total = Object.values(groups).reduce(add, empty());
     const currentError = latestStepError && latestStepError.index > Math.max(lastUserAt, lastAssistantAt) ? latestStepError : null;
-    return { groups, total, media: [...media.values()], steps: steps.length, userMessages, assistantMessages, currentError };
+    const activeBreakdown = {
+      systemTokens: Math.max(0, number(options.systemTokens) || 0),
+      toolDefTokens: Math.max(0, number(options.toolDefTokens) || 0),
+      userTokens: midEstimateTokens(activeGroups.user),
+      assistantTokens: midEstimateTokens(activeGroups.assistant),
+      toolResultTokens: midEstimateTokens(activeGroups.tools),
+      thinkingTokens: midEstimateTokens(activeGroups.thinking)
+    };
+    return {
+      groups,
+      total,
+      media: [...media.values()],
+      steps: list.length,
+      userMessages,
+      assistantMessages,
+      currentError,
+      compactionCount,
+      lastCompactionFreedTokens,
+      lastCheckpointStepIdx,
+      preCheckpointMetadataIdx,
+      activeBreakdown,
+      turns,
+      stepDates,
+      turnDateByKey
+    };
   }
   const api = {
     API_PRICING_CATALOG,
@@ -1040,6 +1306,7 @@
     add,
     empty,
     analyzeSteps,
+    extractStepDateKey,
     parseDurationSec
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

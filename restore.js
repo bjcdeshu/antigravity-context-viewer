@@ -5,9 +5,23 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { getStateDir } = require('./asar-engine');
+const { loadAsarEngine, getStateDir } = require('./asar-engine');
 
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+function canRecoverDriftedMeterArchive(installedPath, backupPath) {
+  try {
+    if (!installedPath || !backupPath || !fs.existsSync(installedPath) || !fs.existsSync(backupPath)) return false;
+    const asar = loadAsarEngine();
+    const utilsSrc = asar.extractFile(installedPath, 'dist/utils.js').toString('utf8');
+    if (!utilsSrc.includes('installContextMeter')) return false;
+    const installedPkg = JSON.parse(asar.extractFile(installedPath, 'package.json').toString('utf8'));
+    const backupPkg = JSON.parse(asar.extractFile(backupPath, 'package.json').toString('utf8'));
+    return Boolean(installedPkg?.version && installedPkg.version === backupPkg?.version);
+  } catch {
+    return false;
+  }
+}
 
 async function tryHotDispose() {
   try {
@@ -58,7 +72,7 @@ async function restore() {
   if (!backup || !fs.existsSync(backup) || sha(backup) !== expected) {
     throw new Error('Backup checksum mismatch; refusing restore');
   }
-  if (sha(info.installed) !== info.patchedSha256) {
+  if (sha(info.installed) !== info.patchedSha256 && !canRecoverDriftedMeterArchive(info.installed, backup)) {
     throw new Error('Installed app has changed (possibly updated); refusing to overwrite');
   }
   try {
@@ -82,4 +96,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { restore, tryHotDispose };
+module.exports = { restore, tryHotDispose, canRecoverDriftedMeterArchive };

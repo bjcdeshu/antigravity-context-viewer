@@ -1,3 +1,26 @@
+# Release Notes — v3.0.0
+
+## Antigravity Context & Token Viewer v3.0.0
+
+### Highlights
+1. **Antigravity `v2.31.2` 全量新模型目录与归档自愈（Gemini 4 Hydrogen & Orchestrator）**
+   - 新增 `Gemini 4 Hydrogen`（`MODEL_PLACEHOLDER_M525..528`，`$1.50 / $0.075 / $7.50` 每百万 Token）与 `Orchestrator (Carbon / Argon)`（`MODEL_PLACEHOLDER_M667 / M681`）映射及官方 `$ USD` 计价目录。
+   - 适配 `v2.31.2` `chatModel.responseModel` 与 `GetUserStatus` 双键配额匹配（`modelId` + `placeholder`），升级模型归因缓存至 `schemaVersion: 3`，自动清理历史归档中残留的 `unattributed` 桶缩放失真。
+
+2. **`/swarm` 蜂群 · 子代理 · `/btw` 整树费用归并与 Top 主会话排行**
+   - 串联本地 `.system_generated/swarm/members.json`、`.system_generated/subagents/*.json` 与宿主 `GetAllCascadeTrajectories`，建立多级子会话到根会话的传递闭包映射（`childToRoot`），保证全局日度 `dailyMap` 零重复计入。
+   - 会话上下文面板新增子代理整树费用归并提示（无子代理时完全静默），Token 面板新增可展开的 **高消耗主会话排行（`topSessions`）**。
+
+3. **`/compact` 检查点压缩感知与服务端实测上下文构成**
+   - 优先解析 `chatStartMetadata.contextWindowMetadata.tokenBreakdown` 服务端实测分组（系统指令 / 工具定义 / 对话），并在发生 `/compact`（`CHECKPOINT`）压缩后准确切换至压缩点之后的活动窗口构成，同步呈现压缩次数与最近一次释放的 Token 量。
+   - 按每轮对话真实发生日期（`dateKey`）对齐优惠期实价或标准零售价。
+
+4. **Onyx 明暗双主题原生界面精简与宿主生命周期自愈**
+   - 引入语义化 Onyx 明暗主题令牌桥接、无框顶栏指示器、高密度去框热力图与 `Quiet-by-Default` 状态收敛。
+   - 主进程支持 `BaseWindow`（`base-window-created`）及 `data:` `curtainView` 遮罩过滤与 `hubWcv` 延迟挂载自愈；修复顶栏下移后的 WCO 占位残留；`restore.js` / `install.js` 支持 SHA-256 备份校验通过时的补丁归档哈希漂移恢复。
+
+---
+
 # Release Notes — v2.9.0
 
 ## Antigravity Context & Token Viewer v2.9.0

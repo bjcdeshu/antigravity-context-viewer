@@ -383,5 +383,526 @@ test('v2.9.0: per-model pricing catalog, placeholder mapping, promo vs standard 
   }
 });
 
+test('v3.0.0: Antigravity v2.31.2 models (Hydrogen & Orchestrator), dual modelId/placeholder quota lookup, and clean pool labels', () => {
+  const {
+    normalizeModelFamily,
+    resolveModelDisplayLabel,
+    resolveModelQuota,
+    getModelRates,
+    calculateTurnCost
+  } = require('./meter-core');
+
+  // 1) Gemini 4 Hydrogen (Low/Medium/High/XHigh) & Orchestrator (Carbon/Argon)
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M525'), 'gemini-4-hydrogen');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M528'), 'gemini-4-hydrogen');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M526'), 'gemini-4-hydrogen');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M527'), 'gemini-4-hydrogen');
+  assert.equal(resolveModelDisplayLabel('MODEL_PLACEHOLDER_M528'), 'Gemini 4 Hydrogen (XHigh)');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M667'), 'gemini-pro-orchestrator');
+  assert.equal(normalizeModelFamily('gemini-pro-orchestrator'), 'gemini-pro-orchestrator');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M681'), 'gemini-pro-orchestrator-argon');
+  assert.equal(normalizeModelFamily('gemini-pro-orchestrator-argon'), 'gemini-pro-orchestrator-argon');
+
+  // 2) Hydrogen flat pricing ($1.50 / $0.075 / $7.50) & Orchestrator promo/retail rates
+  const hydroAct = getModelRates('MODEL_PLACEHOLDER_M525', { pricingMode: 'actual', dateKey: '2026-11-13' });
+  const hydroStd = getModelRates('Gemini 4 Hydrogen (High)', { pricingMode: 'standard', dateKey: '2026-11-13' });
+  assert.equal(hydroAct.shortLabel, 'Hydrogen');
+  assert.equal(hydroAct.input, 1.50);
+  assert.equal(hydroAct.cacheRead, 0.075);
+  assert.equal(hydroAct.output, 7.50);
+  assert.equal(hydroStd.input, 1.50);
+
+  const orchCarbonTurn = calculateTurnCost({
+    rawModel: 'gemini-pro-orchestrator',
+    input: 100000,
+    cache: 400000,
+    output: 10000,
+    dateKey: '2026-11-13'
+  }, { pricingMode: 'actual' });
+  assert.equal(orchCarbonTurn.modelKey, 'gemini-pro-orchestrator');
+  assert.equal(orchCarbonTurn.shortLabel, 'Orch-Carbon');
+  assert.ok(orchCarbonTurn.costUSD > 0);
+
+  const orchArgonRates = getModelRates('MODEL_PLACEHOLDER_M681', { pricingMode: 'standard', dateKey: '2026-11-13' });
+  assert.equal(orchArgonRates.modelKey, 'gemini-pro-orchestrator-argon');
+  assert.equal(orchArgonRates.shortLabel, 'Orch-Argon');
+  assert.equal(orchArgonRates.input, 4.00);
+
+  // 3) Dual modelId + placeholder quota resolution & removal of stale "(周限额)"
+  const liveConfigs = [
+    {
+      label: 'Gemini 4 Carbon (High)',
+      modelId: 'MODEL_PLACEHOLDER_M427',
+      placeholder: 'MODEL_PLACEHOLDER_M427',
+      quotaInfo: { remainingFraction: 0.8, resetTime: '2026-11-13T07:00:00Z' }
+    },
+    {
+      label: 'Orchestrator (Carbon)',
+      modelId: 'gemini-pro-orchestrator',
+      placeholder: 'MODEL_PLACEHOLDER_M667',
+      quotaInfo: { remainingFraction: 0.65, resetTime: '2026-11-13T07:00:00Z' }
+    },
+    {
+      label: 'Gemini 4 Hydrogen (High)',
+      modelId: 'MODEL_PLACEHOLDER_M525',
+      placeholder: 'MODEL_PLACEHOLDER_M525',
+      quotaInfo: { remainingFraction: 1, resetTime: '2026-11-13T07:00:00Z' }
+    }
+  ];
+  assert.equal(resolveModelDisplayLabel('MODEL_PLACEHOLDER_M667', liveConfigs), 'Orchestrator (Carbon)');
+  assert.equal(resolveModelDisplayLabel('gemini-pro-orchestrator', liveConfigs), 'Orchestrator (Carbon)');
+
+  const qCarbon = resolveModelQuota('MODEL_PLACEHOLDER_M427', liveConfigs);
+  assert.equal(qCarbon.poolName, 'Gemini 4 Carbon 配额');
+  assert.ok(!qCarbon.poolName.includes('周限额'));
+
+  const qOrch = resolveModelQuota('MODEL_PLACEHOLDER_M667', liveConfigs);
+  assert.equal(qOrch.poolName, 'Orchestrator (Carbon) 配额');
+  assert.equal(qOrch.remainingFraction, 0.65);
+
+  const qHydro = resolveModelQuota('Gemini 4 Hydrogen (Low)', liveConfigs);
+  assert.equal(qHydro.poolName, 'Gemini 4 Hydrogen 配额');
+});
+
+test('v3.0.0: native chatStartMetadata.tokenBreakdown, post-/compact activeBreakdown, compactionCount, and step dateKey', () => {
+  // 1) summarize parses native server tokenBreakdown.groups and preserves it across non-overflow errors
+  const metaWithBreakdown = {
+    chatModel: {
+      model: 'MODEL_PLACEHOLDER_M525',
+      usage: { inputTokens: '3831', cacheReadTokens: '10000', outputTokens: '669' },
+      chatStartMetadata: {
+        contextWindowMetadata: {
+          estimatedTokensUsed: 13831,
+          maxContextTokens: 1000000,
+          tokenBreakdown: {
+            totalTokens: 13831,
+            groups: [
+              { name: 'system_prompt', type: 'TOKEN_TYPE_SYSTEM_PROMPT', numTokens: 6200 },
+              { name: 'tools', type: 'TOKEN_TYPE_TOOLS', numTokens: 4800 },
+              { name: 'chat_messages', type: 'TOKEN_TYPE_CHAT_MESSAGES', numTokens: 2831 }
+            ]
+          }
+        }
+      }
+    }
+  };
+  const s1 = summarize(metaWithBreakdown);
+  assert.equal(s1.rawModel, 'MODEL_PLACEHOLDER_M525');
+  assert.equal(s1.model, 'Gemini 4 Hydrogen (High)');
+  assert.deepEqual(s1.tokenBreakdown, {
+    system: 6200,
+    tools: 4800,
+    messages: 2831,
+    total: 13831,
+    source: 'native'
+  });
+
+  const retryErr = summarize({
+    chatModel: {
+      retryInfos: [{ error: 'Post "https://api.example.com": context deadline exceeded' }]
+    }
+  }, { previousValidContext: s1 });
+  assert.deepEqual(retryErr.tokenBreakdown, s1.tokenBreakdown);
+
+  const overflowErr = summarize({
+    chatModel: {
+      retryInfos: [{ error: exceeded }]
+    }
+  }, { previousValidContext: s1 });
+  assert.equal(overflowErr.tokenBreakdown, null);
+
+  // 2) analyzeSteps tracks post-CHECKPOINT activeBreakdown, compactionCount, lastCompactionFreedTokens, and step/turn dateKey
+  const steps = [
+    {
+      metadata: { createdAt: '2026-11-12T10:00:00Z' },
+      userInput: { userResponse: 'A'.repeat(4000) }
+    },
+    {
+      metadata: {
+        createdAt: '2026-11-12T10:01:00Z',
+        chatModel: { usage: { inputTokens: 42927, cacheReadTokens: 200000, outputTokens: 1500 } }
+      },
+      plannerResponse: { response: 'B'.repeat(4000), thinking: 'T'.repeat(2000) }
+    },
+    {
+      metadata: { createdAt: '2026-11-13T02:00:00Z' },
+      checkpoint: {
+        includedStepIndexEnd: 2,
+        sessionSummary: 'Compacted summary',
+        userIntent: 'Continue after compact'
+      }
+    },
+    {
+      metadata: { createdAt: '2026-11-13T02:01:00Z' },
+      userInput: { userResponse: 'short follow-up' }
+    },
+    {
+      metadata: {
+        createdAt: '2026-11-13T02:02:00Z',
+        chatModel: { usage: { inputTokens: 3831, cacheReadTokens: 10000, outputTokens: 400 } }
+      },
+      plannerResponse: { response: 'concise reply', thinking: 'brief thought' }
+    }
+  ];
+
+  const analyzed = analyzeSteps(steps);
+  assert.equal(analyzed.compactionCount, 1);
+  assert.equal(analyzed.lastCompactionFreedTokens, 242927 - 13831);
+  assert.ok(analyzed.groups.user.chars > 4000, 'Cumulative session history preserved in groups');
+  assert.ok(analyzed.activeBreakdown.userTokens > 0 && analyzed.activeBreakdown.userTokens < 50, 'activeBreakdown counts only post-checkpoint steps');
+  assert.ok(analyzed.activeBreakdown.assistantTokens > 0 && analyzed.activeBreakdown.assistantTokens < 50);
+  assert.ok(analyzed.activeBreakdown.thinkingTokens > 0 && analyzed.activeBreakdown.thinkingTokens < 50);
+  assert.equal(analyzed.turns.length, 2);
+  assert.equal(analyzed.turns[0].dateKey, '2026-11-12');
+  assert.equal(analyzed.turns[1].dateKey, '2026-11-13');
+  assert.equal(analyzed.stepDates[0].dateKey, '2026-11-12');
+  assert.equal(analyzed.stepDates[4].dateKey, '2026-11-13');
+  assert.equal(analyzed.turnDateByKey['step:0'], '2026-11-12');
+  assert.equal(analyzed.turnDateByKey['step:4'], '2026-11-13');
+
+  // External generatorMetadata fallback when GetCascadeTrajectorySteps omits inline usage
+  const stepsNoInlineUsage = steps.map(s => {
+    const clone = JSON.parse(JSON.stringify(s));
+    if (clone.metadata) delete clone.metadata.chatModel;
+    return clone;
+  });
+  const analyzedFromGm = analyzeSteps(stepsNoInlineUsage, {
+    generatorMetadata: [
+      { stepIndices: [1], chatModel: { usage: { inputTokens: 42927, cacheReadTokens: 200000, outputTokens: 1500 } } },
+      { stepIndices: [4], chatModel: { usage: { inputTokens: 3831, cacheReadTokens: 10000, outputTokens: 400 } } }
+    ]
+  });
+  assert.equal(analyzedFromGm.compactionCount, 1);
+  assert.equal(analyzedFromGm.lastCompactionFreedTokens, 242927 - 13831);
+});
+
+test('v3.0.0: purges stale archive oldModels.unattributed poisoning without scaling shrinkage and migrates v2 attribution cache', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { collectTokenHistory } = require('./meter-collector');
+
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v3-poison-'));
+  try {
+    const agDir = path.join(tmpHome, '.gemini', 'antigravity');
+    const logDir = path.join(agDir, 'brain', 'conv-hydro-1', '.system_generated', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+
+    // Total on 2026-11-13 is 3,840,000 tokens (1,000,000 Argon + 2,840,000 Hydrogen)
+    fs.writeFileSync(path.join(logDir, 'transcript.jsonl'), [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        metadata: {
+          created_at: '2026-11-13T01:00:00Z',
+          token_usage: { input_tokens: 100000, cache_read_tokens: 850000, output_tokens: 50000 }
+        }
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        metadata: {
+          created_at: '2026-11-13T02:00:00Z',
+          token_usage: { input_tokens: 400000, cache_read_tokens: 2400000, output_tokens: 40000 }
+        }
+      })
+    ].join('\n'), 'utf8');
+
+    // Poisoned v2.9.0 archive where Hydrogen was persisted under oldModels.unattributed
+    fs.writeFileSync(path.join(agDir, 'token_usage_archive_v3.json'), JSON.stringify({
+      schemaVersion: 3,
+      firstInstallDate: '2026-11-13',
+      firstTokenDate: '2026-11-13',
+      dailyMap: {
+        '2026-11-13': {
+          total: 3840000,
+          input: 500000,
+          cache: 3250000,
+          output: 90000,
+          steps: 2,
+          models: {
+            'gemini-4-argon': { input: 100000, cache: 850000, output: 50000, total: 1000000, steps: 1 },
+            unattributed: { input: 400000, cache: 2400000, output: 40000, total: 2840000, steps: 1 }
+          }
+        }
+      }
+    }), 'utf8');
+
+    // Schema v2 legacy attribution cache containing raw placeholder MODEL_PLACEHOLDER_M525
+    const legacyV1Path = path.join(agDir, 'model_attribution_cache_v1.json');
+    const v3CachePath = path.join(agDir, 'model_attribution_cache_v3.json');
+    const legacyV1Raw = JSON.stringify({
+      schemaVersion: 2,
+      conversations: {
+        'conv-hydro-1': {
+          tSize: 100,
+          tMtime: 1000,
+          items: [
+            ['rid-1', 'MODEL_PLACEHOLDER_M417', '2026-11-13', 100000, 850000, 50000],
+            ['rid-2', 'MODEL_PLACEHOLDER_M525', '2026-11-13', 400000, 2400000, 40000]
+          ]
+        }
+      }
+    });
+    fs.writeFileSync(legacyV1Path, legacyV1Raw, 'utf8');
+
+    const res = collectTokenHistory({ homeDir: tmpHome, force: true });
+    const dayModels = res.dailyMap['2026-11-13'].models;
+    assert.equal(dayModels.unattributed, undefined, 'Stale unattributed bucket must be stripped from mergedModels');
+    assert.equal(dayModels['gemini-4-argon'].total, 1000000, 'Argon tokens must not be scaled down');
+    assert.equal(dayModels['gemini-4-hydrogen'].total, 2840000, 'Hydrogen tokens must be attributed at 100% scale');
+
+    // Verify model_attribution_cache_v3.json is created while legacy model_attribution_cache_v1.json remains untouched
+    assert.equal(fs.existsSync(v3CachePath), true, 'model_attribution_cache_v3.json must be created');
+    const v3Saved = JSON.parse(fs.readFileSync(v3CachePath, 'utf8'));
+    assert.equal(v3Saved.schemaVersion, 3);
+    assert.equal(v3Saved.conversations['conv-hydro-1'].needsV3Rescan, true, 'needsV3Rescan preserved until live LS rescan');
+    assert.equal(fs.readFileSync(legacyV1Path, 'utf8'), legacyV1Raw, 'legacy model_attribution_cache_v1.json must remain untouched');
+
+    // Simulate un-restarted v2.9.0 main process clobbering v1 cache + poisoning archive_v3 with unattributed & shrunk Hydrogen
+    fs.writeFileSync(legacyV1Path, JSON.stringify({
+      schemaVersion: 2,
+      conversations: {
+        'conv-hydro-1': {
+          tSize: 100,
+          tMtime: 1000,
+          items: [
+            ['rid-1', 'gemini-4-argon', '2026-11-13', 100000, 850000, 50000],
+            ['rid-2', 'unattributed', '2026-11-13', 400000, 2400000, 40000]
+          ]
+        }
+      }
+    }), 'utf8');
+    fs.writeFileSync(path.join(agDir, 'token_usage_archive_v3.json'), JSON.stringify({
+      schemaVersion: 3,
+      firstInstallDate: '2026-11-13',
+      firstTokenDate: '2026-11-13',
+      dailyMap: {
+        '2026-11-13': {
+          total: 3840000,
+          input: 500000,
+          cache: 3250000,
+          output: 90000,
+          steps: 2,
+          models: {
+            'gemini-4-argon': { input: 57000, cache: 487000, output: 28000, total: 572000, steps: 1 },
+            'gemini-4-hydrogen': { input: 229000, cache: 1376000, output: 22000, total: 1627000, steps: 1 },
+            unattributed: { input: 400000, cache: 2400000, output: 40000, total: 2840000, steps: 1 }
+          }
+        }
+      }
+    }), 'utf8');
+
+    const resAfterV29Clobber = collectTokenHistory({ homeDir: tmpHome, force: true });
+    const healedModels = resAfterV29Clobber.dailyMap['2026-11-13'].models;
+    assert.equal(healedModels.unattributed, undefined);
+    assert.equal(healedModels['gemini-4-argon'].total, 1000000);
+    assert.equal(healedModels['gemini-4-hydrogen'].total, 2840000);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('v3.0.0: /swarm + invoke_subagent + /btw session hierarchy, sessionRollups, topSessions, and zero dailyMap double-counting', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { collectTokenHistory } = require('./meter-collector');
+
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v3-swarm-'));
+  try {
+    const agDir = path.join(tmpHome, '.gemini', 'antigravity');
+    const writeTranscript = (convId, userText, inp, cac, out) => {
+      const dir = path.join(agDir, 'brain', convId, '.system_generated', 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      const lines = [];
+      if (userText) {
+        lines.push(JSON.stringify({
+          type: 'USER_INPUT',
+          created_at: '2026-11-13T02:00:00Z',
+          content: `<USER_REQUEST>${userText}</USER_REQUEST>`
+        }));
+      }
+      lines.push(JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        metadata: {
+          created_at: '2026-11-13T02:05:00Z',
+          token_usage: { input_tokens: inp, cache_read_tokens: cac, output_tokens: out }
+        }
+      }));
+      fs.writeFileSync(path.join(dir, 'transcript.jsonl'), lines.join('\n'), 'utf8');
+    };
+
+    // Root swarm session + 1 swarm worker + 1 direct subagent + 1 nested helper under swarm worker
+    writeTranscript('root-conv-1111', '升级 Context Meter v3.0.0', 50000, 200000, 5000);
+    writeTranscript('worker-conv-2222', 'You are ui-opus', 80000, 300000, 10000);
+    writeTranscript('sub-conv-3333', 'Explore subagent', 20000, 50000, 2000);
+    writeTranscript('helper-conv-4444', 'Nested verifier helper', 10000, 30000, 1000);
+
+    // Standalone root session + 1 /btw side question
+    writeTranscript('solo-conv-5555', '构建 Onyx 极简双主题热力图', 30000, 70000, 4000);
+    writeTranscript('side-conv-6666', '顺便问一下 CSS 颜色变量', 5000, 10000, 500);
+
+    // Link swarm members & subagents on disk
+    const rootSys = path.join(agDir, 'brain', 'root-conv-1111', '.system_generated');
+    fs.mkdirSync(path.join(rootSys, 'swarm'), { recursive: true });
+    fs.writeFileSync(path.join(rootSys, 'swarm', 'members.json'), JSON.stringify({
+      title: 'Context Meter v3.0 Swarm',
+      members: {
+        coordinator: { conversation_id: 'root-conv-1111', role: 'coordinator' },
+        'ui-opus': { conversation_id: 'worker-conv-2222', role: 'worker' }
+      }
+    }), 'utf8');
+    fs.mkdirSync(path.join(rootSys, 'subagents'), { recursive: true });
+    fs.writeFileSync(path.join(rootSys, 'subagents', 'sub1.json'), JSON.stringify({
+      conversationId: 'sub-conv-3333'
+    }), 'utf8');
+
+    const workerSubDir = path.join(agDir, 'brain', 'worker-conv-2222', '.system_generated', 'subagents');
+    fs.mkdirSync(workerSubDir, { recursive: true });
+    fs.writeFileSync(path.join(workerSubDir, 'helper1.json'), JSON.stringify({
+      conversationId: 'helper-conv-4444'
+    }), 'utf8');
+
+    // Attribution cache v3 with per-conversation models & /btw sideQuestion link
+    fs.writeFileSync(path.join(agDir, 'model_attribution_cache_v3.json'), JSON.stringify({
+      schemaVersion: 3,
+      conversations: {
+        'root-conv-1111': { tSize: 1, tMtime: 1, items: [['r1', 'gemini-pro-orchestrator', '2026-11-13', 50000, 200000, 5000]] },
+        'worker-conv-2222': { tSize: 1, tMtime: 1, items: [['r2', 'MODEL_PLACEHOLDER_M402', '2026-11-13', 80000, 300000, 10000]] },
+        'sub-conv-3333': { tSize: 1, tMtime: 1, items: [['r3', 'MODEL_PLACEHOLDER_M525', '2026-11-13', 20000, 50000, 2000]] },
+        'helper-conv-4444': { tSize: 1, tMtime: 1, items: [['r4', 'MODEL_PLACEHOLDER_M318', '2026-11-13', 10000, 30000, 1000]] },
+        'solo-conv-5555': { tSize: 1, tMtime: 1, items: [['r5', 'MODEL_PLACEHOLDER_M525', '2026-11-13', 30000, 70000, 4000]] },
+        'side-conv-6666': { tSize: 1, tMtime: 1, items: [['r6', 'MODEL_PLACEHOLDER_M318', '2026-11-13', 5000, 10000, 500]] }
+      },
+      trajectoryMeta: {
+        titles: {},
+        parentMap: {},
+        sideQuestions: { 'side-conv-6666': 'solo-conv-5555' }
+      }
+    }), 'utf8');
+
+    const out = collectTokenHistory({ homeDir: tmpHome, force: true });
+
+    // Transitive childToRoot closure
+    assert.equal(out.childToRoot['worker-conv-2222'], 'root-conv-1111');
+    assert.equal(out.childToRoot['sub-conv-3333'], 'root-conv-1111');
+    assert.equal(out.childToRoot['helper-conv-4444'], 'root-conv-1111');
+    assert.equal(out.childToRoot['side-conv-6666'], 'solo-conv-5555');
+
+    // Session rollup accuracy
+    const swarmRollup = out.sessionRollups['root-conv-1111'];
+    assert.ok(swarmRollup);
+    assert.equal(swarmRollup.title, 'Context Meter v3.0 Swarm');
+    assert.equal(swarmRollup.childCount, 3);
+    assert.equal(swarmRollup.ownTokens, 255000);
+    assert.equal(swarmRollup.childTokens, 390000 + 72000 + 41000);
+    assert.equal(swarmRollup.totalTokens, 255000 + 390000 + 72000 + 41000);
+    assert.ok(swarmRollup.childCostUSD > swarmRollup.ownCostUSD);
+    assert.equal(Number((swarmRollup.ownCostUSD + swarmRollup.childCostUSD).toFixed(4)), swarmRollup.totalCostUSD);
+
+    const soloRollup = out.sessionRollups['solo-conv-5555'];
+    assert.ok(soloRollup);
+    assert.equal(soloRollup.title, '构建 Onyx 极简双主题热力图');
+    assert.equal(soloRollup.childCount, 1);
+    assert.equal(soloRollup.totalTokens, 104000 + 15500);
+
+    // Top Root Sessions & summary counts
+    assert.equal(out.topSessions.length, 2);
+    assert.equal(out.topSessions[0].rootId, 'root-conv-1111');
+    assert.equal(out.topSessions[0].topModel, 'Opus 5.5');
+    assert.equal(out.summary.rootSessionCount, 2);
+    assert.equal(out.summary.subagentSessionCount, 4);
+
+    // Zero double-counting in dailyMap / grandTotalTokens
+    const expectedGrandTotal = 255000 + 390000 + 72000 + 41000 + 104000 + 15500;
+    assert.equal(out.summary.grandTotalTokens, expectedGrandTotal);
+    assert.equal(out.dailyMap['2026-11-13'].total, expectedGrandTotal);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('v3.0.0: BaseWindow curtainView skipping in meter-main.js (no close hijack) and SHA-verified drift recovery in restore.js', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const crypto = require('node:crypto');
+  const { getWindowWebContents, installContextMeter } = require('./meter-main');
+  const { builtinAsar } = require('./asar-engine');
+  const { canRecoverDriftedMeterArchive, restore } = require('./restore');
+
+  // 1) BaseWindow with data: curtainView + https://127.0.0.1:7413/ hubWcv
+  const curtainWc = { isDestroyed: () => false, getURL: () => 'data:text/html,<html></html>' };
+  const hubWc = { isDestroyed: () => false, getURL: () => 'https://127.0.0.1:7413/workbench.html', on: () => {} };
+  const events = {};
+  const fakeBaseWin = {
+    isDestroyed: () => false,
+    webContents: undefined,
+    contentView: {
+      children: [
+        { webContents: curtainWc },
+        { webContents: hubWc }
+      ]
+    },
+    on(ev, fn) {
+      events[ev] = fn;
+    }
+  };
+  assert.equal(getWindowWebContents(fakeBaseWin), hubWc, 'Must skip data: curtainView and return hubWcv webContents');
+
+  installContextMeter(fakeBaseWin);
+  assert.equal(events.close, undefined, 'Must NEVER register win.on("close") e.preventDefault() hijack');
+  assert.equal(typeof events.closed, 'function', 'Must clean up timers on closed');
+  events.closed();
+
+  // 2) SHA-verified ASAR drift recovery in restore.js
+  const tmpState = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v3-restore-'));
+  const prevStateEnv = process.env.AG_METER_STATE_DIR;
+  process.env.AG_METER_STATE_DIR = tmpState;
+  try {
+    const buildTestAsar = async (name, version, utilsCode) => {
+      const src = path.join(tmpState, `src-${name}`);
+      fs.mkdirSync(path.join(src, 'dist'), { recursive: true });
+      fs.writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'antigravity', version }), 'utf8');
+      fs.writeFileSync(path.join(src, 'dist', 'utils.js'), utilsCode, 'utf8');
+      const outAsar = path.join(tmpState, `${name}.asar`);
+      await builtinAsar.createPackageWithOptions(src, outAsar, {});
+      return outAsar;
+    };
+    const shaFile = p => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+
+    const backupAsar = await buildTestAsar('backup', '2.31.2', '"use strict";\nvoid win.loadURL(url);');
+    const driftedMeterAsar = await buildTestAsar('installed-drifted', '2.31.2', '"use strict";\nrequire("./meter-main").installContextMeter(win);\nvoid win.loadURL(url);');
+    const upgradedHostAsar = await buildTestAsar('installed-upgraded', '2.32.0', '"use strict";\nvoid win.loadURL(url);');
+
+    assert.equal(canRecoverDriftedMeterArchive(driftedMeterAsar, backupAsar), true);
+    assert.equal(canRecoverDriftedMeterArchive(upgradedHostAsar, backupAsar), false);
+
+    // Verify restore() succeeds on drifted meter archive with intact backup SHA
+    const installedTarget = path.join(tmpState, 'app.asar');
+    fs.copyFileSync(driftedMeterAsar, installedTarget);
+    fs.writeFileSync(path.join(tmpState, 'installation.json'), JSON.stringify({
+      meterVersion: '3.0.0',
+      version: '2.31.2',
+      installed: installedTarget,
+      backup: backupAsar,
+      originalSha256: shaFile(backupAsar),
+      patchedSha256: '0'.repeat(64)
+    }), 'utf8');
+
+    const res = await restore();
+    assert.equal(res.restored, installedTarget);
+    assert.equal(shaFile(installedTarget), shaFile(backupAsar));
+
+    // Verify restore() refuses to overwrite a clean upgraded host archive
+    fs.copyFileSync(upgradedHostAsar, installedTarget);
+    await assert.rejects(() => restore(), /Installed app has changed/);
+  } finally {
+    if (prevStateEnv === undefined) delete process.env.AG_METER_STATE_DIR;
+    else process.env.AG_METER_STATE_DIR = prevStateEnv;
+    fs.rmSync(tmpState, { recursive: true, force: true });
+  }
+});
+
+
 
 

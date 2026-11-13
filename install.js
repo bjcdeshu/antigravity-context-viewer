@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { loadAsarEngine, getStateDir } = require('./asar-engine');
+const { canRecoverDriftedMeterArchive } = require('./restore');
 
 const asar = loadAsarEngine();
 const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
@@ -173,7 +174,7 @@ async function install(options = {}) {
     const previous = JSON.parse(fs.readFileSync(activeManifestPath, 'utf8'));
     previousManifest = previous;
     const currentInstalledSha = sha(fs.readFileSync(installed));
-    if (currentInstalledSha === previous.patchedSha256) {
+    if (currentInstalledSha === previous.patchedSha256 || canRecoverDriftedMeterArchive(installed, previous.backup)) {
       if (!fs.existsSync(previous.backup) || sha(fs.readFileSync(previous.backup)) !== previous.originalSha256) {
         throw new Error('Original backup checksum mismatch');
       }
@@ -279,7 +280,7 @@ async function install(options = {}) {
     const previousInstalledSha256 = sha(fs.readFileSync(previousInstalledBackup));
 
     const manifest = {
-      meterVersion: '2.9.0',
+      meterVersion: require('./package.json').version || '3.0.0',
       version,
       installed,
       backup,

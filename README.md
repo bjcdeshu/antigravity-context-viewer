@@ -1,8 +1,8 @@
 # Antigravity 对话上下文查看器 & Token 用量看板 (Antigravity Context & Token Viewer)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-2.9.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/Antigravity-2.31.0%2B-8B5CF6" alt="Antigravity 2.31.0+">
+  <img src="https://img.shields.io/badge/Version-3.0.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Antigravity-2.31.2%2B-8B5CF6" alt="Antigravity 2.31.2+">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18.x-brightgreen?logo=node.js" alt="Node Version">
   <img src="https://img.shields.io/badge/Dependencies-Zero-success" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform Support">
@@ -13,11 +13,28 @@
   <b>简体中文</b> | <a href="README.en.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.es.md">Español</a>
 </p>
 
-专为 **Google Antigravity 桌面客户端 (2.x / v2.31.0+)** 打造的原生级 **「单次会话上下文与 API 等值监控 + 账号全局按模型归因 Token 5 视图热力图 + 模型实时输出速度监控」** 全功能可视化套件。采用 **ASAR 持久化注入 + CDP 免重启热挂载** 架构，**零第三方 npm 依赖**，既支持双击脚本一键安装，也支持直接交给任何 AI 智能体（Antigravity / Codex / Claude Code / Cursor）一句话自动部署。
+专为 **Google Antigravity 桌面客户端 (2.x / v2.31.2+)** 打造的原生级 **「单次会话上下文与主从会话树 API 等值监控 + 账号全局按模型归因 Token 5 视图热力图 + 模型实时输出速度监控」** 全功能可视化套件。采用 **ASAR 持久化注入 + CDP 免重启热挂载** 架构，**零第三方 npm 依赖**，既支持双击脚本一键安装，也支持直接交给任何 AI 智能体（Antigravity / Codex / Claude Code / Cursor）一句话自动部署。
 
 ---
 
-## 🔥 v2.9.0 核心升级亮点 (What's New in v2.9.0)
+## 🔥 v3.0.0 核心升级亮点 (What's New in v3.0.0)
+
+1. **Antigravity `v2.31.2` 全量新模型目录与归档自愈（Hydrogen & Orchestrator）**：
+   - 新增 `Gemini 4 Hydrogen`（`Low / Medium / High / XHigh`，`MODEL_PLACEHOLDER_M525..528`）与 `Orchestrator (Carbon / Argon)`（`MODEL_PLACEHOLDER_M667 / M681`）精确模型映射与官方 `$ USD` 费率；
+   - 适配 `v2.31.2` `chatModel.responseModel` 与双键配额配置表（`modelId` + `placeholder`），自动升级模型归因缓存至 `schemaVersion: 3`，并无损清除旧版归档中残留的 `unattributed` 桶缩放偏差。
+2. **`/swarm` 蜂群 · 子代理 · `/btw` 支线会话整树费用归并 & 主会话排行**：
+   - 自动串联 `.system_generated/swarm/members.json`、`.system_generated/subagents/*.json` 与宿主 `GetAllCascadeTrajectories` 元数据，将子代理、`/swarm` Worker 与 `/btw` 支线问答的 Token 及 `$` 成本完整归并至所属主会话（全局热力图日度总量严格零重复累加）；
+   - 当前会话面板实时展示主从整树合计费用与子代理明细，Token 面板新增可折叠 **「高消耗主会话排行（Top Sessions）」** 列表。
+3. **`/compact` 检查点压缩感知与服务端活动上下文构成实测**：
+   - 直接读取宿主 `chatStartMetadata.contextWindowMetadata.tokenBreakdown` 服务端实测构成（系统指令 / 工具定义 / 对话消息），并在 `/compact`（`CHECKPOINT`）压缩后仅统计仍在活动窗口内的步骤，同步展示压缩次数与最近一次释放的 Token 数；
+   - 按每轮对话真实发生日期（`dateKey`）匹配限时优惠或标准零售费率，消除跨日长会话的计价偏差。
+4. **Onyx 原生双主题桥接、无框精简热力图与 `BaseWindow` 生命周期自愈**：
+   - 建立语义化 Onyx 明暗主题变量桥接，移除冗余内嵌卡片边框，重构顶栏无框数值指示器与 `Quiet-by-Default` 状态呈现；
+   - 主进程新增 `BaseWindow`（`base-window-created`）与 `curtainView`（`data:` 遮罩层）精准过滤及 `hubWcv` 延迟挂载自愈，窗口控制按钮避让占位支持顶栏下移后自动清理，并在 `restore` / `install` 中支持 SHA-256 校验通过的补丁归档哈希漂移自愈。
+
+---
+
+## 📌 v2.9.0 既有核心特性回顾
 
 1. **真实多模型 API 等值估算引擎（Multi-Model API Valuation）**：
    - 告别单一混合均价估算，直接对接宿主 `GetCascadeTrajectoryGeneratorMetadata` 与 `GetUserStatus` 模型目录，将每日及每轮 Token 精确归因至具体模型家族（`Gemini 4 Argon`、`Gemini 4 Carbon`、`Gemini 3.1 Pro`、`Gemini 3.8 Flash`、`Claude Opus 5.5 / 4.6`、`Claude Sonnet 5.5 / 4.6`、`GPT-OSS 120B` 等），并自动处理 `>200K` 长上下文阶梯单价；

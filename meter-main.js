@@ -1,7 +1,11 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { ipcMain, app } = require('electron');
+let ipcMain = null;
+let app = null;
+try {
+  ({ ipcMain, app } = require('electron'));
+} catch {}
 const { collect, collectTokenHistoryAsync } = require('./meter-collector');
 
 function ensureProxyEnvironment(targetEnv = process.env) {
@@ -67,13 +71,66 @@ function resolveTargetWindow(sender) {
   return null;
 }
 
+function getWindowWebContents(win) {
+  if (!win || win.isDestroyed?.()) return null;
+  try {
+    const direct = win.webContents;
+    if (direct && !direct.isDestroyed?.() && !String(direct.getURL?.() || '').startsWith('data:')) {
+      return direct;
+    }
+  } catch {}
+  try {
+    const utils = require('./utils');
+    if (typeof utils.getHubWebContents === 'function') {
+      const hubWc = utils.getHubWebContents(win);
+      if (hubWc && !hubWc.isDestroyed?.() && !String(hubWc.getURL?.() || '').startsWith('data:')) {
+        return hubWc;
+      }
+    }
+  } catch {}
+  try {
+    const children = win.contentView?.children;
+    if (Array.isArray(children)) {
+      for (const view of children) {
+        const wc = view?.webContents;
+        if (wc && !wc.isDestroyed?.() && /^https:\/\/127\.0\.0\.1:\d+\//.test(String(wc.getURL?.() || ''))) {
+          return wc;
+        }
+      }
+      for (const view of children) {
+        const wc = view?.webContents;
+        if (wc && !wc.isDestroyed?.() && !String(wc.getURL?.() || '').startsWith('data:')) {
+          return wc;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+exports.getWindowWebContents = getWindowWebContents;
+
 let registered = false;
 const boundWindows = new WeakSet();
 const boundWebContents = new WeakSet();
 const injectionTimers = new WeakMap();
+const wcProbeTimers = new WeakMap();
+
+function clearWindowTimers(win) {
+  const inj = injectionTimers.get(win);
+  if (inj) {
+    clearTimeout(inj);
+    injectionTimers.delete(win);
+  }
+  const probe = wcProbeTimers.get(win);
+  if (probe) {
+    clearInterval(probe);
+    wcProbeTimers.delete(win);
+  }
+}
 
 function registerIpcOnce() {
-  if (registered) return;
+  if (registered || !ipcMain || typeof ipcMain.handle !== 'function') return;
   registered = true;
 
   ipcMain.handle('context-meter:scan', async (event, id, force) => {
@@ -127,10 +184,9 @@ function registerIpcOnce() {
 async function ensureMeterInjected(win, options = {}) {
   try {
     if (!win || win.isDestroyed?.()) return false;
-    const wc = win.webContents;
-    if (!wc || wc.isDestroyed?.()) return false;
-    const url = wc.getURL?.() || '';
-    if (!/^https:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+    const wc = getWindowWebContents(win);
+    const url = wc && !wc.isDestroyed?.() ? (wc.getURL?.() || '') : '';
+    if (!wc || wc.isDestroyed?.() || !/^https:\/\/127\.0\.0\.1:\d+\//.test(url)) {
       const attempt = Number(options.attempt || 0);
       const delays = [300, 600, 1000, 1500, 2500];
       if (attempt < delays.length && win && !win.isDestroyed?.()) {
@@ -140,6 +196,7 @@ async function ensureMeterInjected(win, options = {}) {
           injectionTimers.delete(win);
           void ensureMeterInjected(win, { ...options, attempt: attempt + 1 });
         }, delays[attempt]);
+        t.unref?.();
         injectionTimers.set(win, t);
       }
       return false;
@@ -168,6 +225,7 @@ async function ensureMeterInjected(win, options = {}) {
         injectionTimers.delete(win);
         void ensureMeterInjected(win, { ...options, attempt: attempt + 1 });
       }, delays[attempt]);
+      t.unref?.();
       injectionTimers.set(win, t);
     } else {
       console.warn('[Context Meter]', error?.message || String(error));
@@ -177,6 +235,37 @@ async function ensureMeterInjected(win, options = {}) {
 }
 
 exports.ensureMeterInjected = ensureMeterInjected;
+
+function bindWindowWebContents(win) {
+  const wc = getWindowWebContents(win);
+  if (!wc || wc.isDestroyed?.()) return false;
+  const probe = wcProbeTimers.get(win);
+  if (probe) {
+    clearInterval(probe);
+    wcProbeTimers.delete(win);
+  }
+  if (!boundWebContents.has(wc)) {
+    boundWebContents.add(wc);
+    wc.on?.('did-finish-load', () => {
+      void ensureMeterInjected(win, { force: true });
+    });
+    wc.on?.('dom-ready', () => {
+      void ensureMeterInjected(win, { force: false });
+    });
+    wc.on?.('did-navigate', () => {
+      void ensureMeterInjected(win, { force: false });
+    });
+    wc.on?.('did-navigate-in-page', () => {
+      void ensureMeterInjected(win, { force: false });
+    });
+    wc.on?.('zoom-changed', () => {
+      try {
+        void wc.executeJavaScript('window.__AGContextMeter?.ensureAlive?.()');
+      } catch {}
+    });
+  }
+  return true;
+}
 
 exports.installContextMeter = function (win) {
   registerIpcOnce();
@@ -197,44 +286,45 @@ exports.installContextMeter = function (win) {
           win.autoHideMenuBar = true;
         } catch {}
       }
+      bindWindowWebContents(win);
       void ensureMeterInjected(win, { force: false });
     };
     win.on?.('show', onWinVisibleOrActive);
     win.on?.('restore', onWinVisibleOrActive);
     win.on?.('focus', onWinVisibleOrActive);
+    win.on?.('closed', () => clearWindowTimers(win));
   }
 
-  const wc = win.webContents;
-  if (wc && !boundWebContents.has(wc)) {
-    boundWebContents.add(wc);
-    wc.on('did-finish-load', () => {
-      void ensureMeterInjected(win, { force: true });
-    });
-    wc.on('dom-ready', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on('did-navigate', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on('did-navigate-in-page', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on('zoom-changed', () => {
-      try {
-        void wc.executeJavaScript('window.__AGContextMeter?.ensureAlive?.()');
-      } catch {}
-    });
+  const boundNow = bindWindowWebContents(win);
+  if (!boundNow && !wcProbeTimers.has(win)) {
+    let attempts = 0;
+    const maxAttempts = 40;
+    const probe = setInterval(() => {
+      attempts += 1;
+      if (!win || win.isDestroyed?.() || attempts > maxAttempts) {
+        clearInterval(probe);
+        wcProbeTimers.delete(win);
+        return;
+      }
+      if (bindWindowWebContents(win)) {
+        void ensureMeterInjected(win, { force: false });
+      }
+    }, 150);
+    probe.unref?.();
+    wcProbeTimers.set(win, probe);
   }
 };
 
 try {
   if (app && typeof app.on === 'function') {
-    app.on('browser-window-created', (_event, win) => {
+    const onWindowCreated = (_event, win) => {
       try {
         exports.installContextMeter(win);
         void ensureMeterInjected(win, { force: false });
       } catch {}
-    });
+    };
+    app.on('browser-window-created', onWindowCreated);
+    app.on('base-window-created', onWindowCreated);
     app.on('activate', () => {
       try {
         const utils = require('./utils');
