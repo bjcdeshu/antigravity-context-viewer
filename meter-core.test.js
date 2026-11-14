@@ -903,6 +903,80 @@ test('v3.0.0: BaseWindow curtainView skipping in meter-main.js (no close hijack)
   }
 });
 
+test('v3.0.1: Antigravity v2.32.1 Remote-SSH window isolation, catcherView/plugin:// exclusion, and local-api SSH filtering', () => {
+  const {
+    getWindowWebContents,
+    isLocalWindowTarget,
+    isLocalWebContentsTarget,
+    isLocalMainFrameSender,
+    installContextMeter
+  } = require('./meter-main');
+  const { isRemotePageTarget } = require('./local-api');
+
+  const defaultSes = { id: 'default' };
+  const sshPartitionSes = { id: 'persist:remote-racknerd' };
+  const sshPromptSes = { id: 'ssh-prompt' };
+
+  // 1) v2.32.1 three-layer BaseWindow: clipView (no webContents) + hubWcv + catcherView (data:text/html;charset=utf-8,...) + MCP App (plugin://)
+  const catcherWc = { isDestroyed: () => false, session: defaultSes, getURL: () => 'data:text/html;charset=utf-8,%3C!DOCTYPE%20html%3E' };
+  const mcpAppWc = { isDestroyed: () => false, session: defaultSes, getURL: () => 'plugin://swarm--swarm_board-4976/?token=abc' };
+  const hubWc = { isDestroyed: () => false, session: defaultSes, getURL: () => 'https://127.0.0.1:7690/c/123' };
+  const threeLayerWin = {
+    isDestroyed: () => false,
+    contentView: {
+      children: [
+        {}, // clipView (electron.View without webContents)
+        { webContents: catcherWc },
+        { webContents: mcpAppWc },
+        { webContents: hubWc }
+      ]
+    }
+  };
+  assert.equal(getWindowWebContents(threeLayerWin, { defaultSession: defaultSes }), hubWc);
+
+  // 2) SSH Remote window (custom partition OR windowBackends.remoteBackendOf) is rejected in both window and IPC guards
+  const sshWc = { isDestroyed: () => false, session: sshPartitionSes, mainFrame: {}, getURL: () => 'https://127.0.0.1:44123/c/remote' };
+  const sshWinEvents = {};
+  const sshWin = {
+    isDestroyed: () => false,
+    webContents: sshWc,
+    on(ev, fn) { sshWinEvents[ev] = fn; }
+  };
+  assert.equal(isLocalWebContentsTarget(sshWc, { defaultSession: defaultSes }), false);
+  assert.equal(isLocalWindowTarget(sshWin, { defaultSession: defaultSes }), false);
+  assert.equal(getWindowWebContents(sshWin, { defaultSession: defaultSes }), null);
+  assert.equal(
+    isLocalMainFrameSender({ sender: sshWc, senderFrame: sshWc.mainFrame }, { defaultSession: defaultSes }),
+    null,
+    'IPC from SSH remote window must be rejected even though its tunneled URL is https://127.0.0.1:<port>'
+  );
+
+  // windowBackends explicit remote registration also blocks even if session matches
+  const mockWb = {
+    remoteBackendOf: wc => (wc === sshWc ? { hostId: 'racknerd' } : undefined),
+    isLocalAppWindow: win => win !== sshWin
+  };
+  assert.equal(isLocalWindowTarget(sshWin, { windowBackends: mockWb }), false);
+  assert.equal(isLocalMainFrameSender({ sender: sshWc, senderFrame: sshWc.mainFrame }, { windowBackends: mockWb }), null);
+
+  // ssh-prompt modal window is also skipped cleanly
+  const promptWin = {
+    isDestroyed: () => false,
+    webContents: { isDestroyed: () => false, session: sshPromptSes, getURL: () => 'data:text/html,prompt' }
+  };
+  assert.equal(isLocalWindowTarget(promptWin, { defaultSession: defaultSes }), false);
+
+  // Local window passes IPC sender check
+  const localMainFrame = { url: 'https://127.0.0.1:7690/c/local' };
+  const localSender = { isDestroyed: () => false, session: defaultSes, mainFrame: localMainFrame, getURL: () => localMainFrame.url };
+  const parsedLocal = isLocalMainFrameSender({ sender: localSender, senderFrame: localMainFrame }, { defaultSession: defaultSes });
+  assert.equal(parsedLocal?.origin, 'https://127.0.0.1:7690');
+
+  // 3) CDP page title helper recognizes SSH Remote windows
+  assert.equal(isRemotePageTarget({ title: 'workspace - Antigravity (SSH: racknerd)' }), true);
+  assert.equal(isRemotePageTarget({ title: '【Antigravity】Swarm讨论 - Antigravity' }), false);
+});
+
 
 
 

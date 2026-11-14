@@ -216,7 +216,7 @@
     /* 融入宿主原生布局容器时参与正常 Flexbox 空间分配（z-index:100 高于原生 Overview 浮层 z-30） */
     :host([data-dock="flow"]){
       position:relative !important;top:auto !important;right:auto !important;left:auto !important;bottom:auto !important;z-index:100;
-      margin-right:4px;
+      margin-right:4px !important;
     }
     :host([data-dock="flow"][data-elevated="true"]){
       z-index:2147483000 !important;
@@ -2380,12 +2380,17 @@
             }
             if (rightGroup.children) {
               let sum = 0;
+              let btnCount = 0;
               for (const child of rightGroup.children) {
                 if (child !== host && child.getBoundingClientRect) {
-                  sum += child.getBoundingClientRect().width;
+                  const w = child.getBoundingClientRect().width;
+                  if (w > 0) {
+                    sum += w;
+                    btnCount += 1;
+                  }
                 }
               }
-              if (sum > 0) nativeButtonsWidth = sum + 6;
+              if (sum > 0) nativeButtonsWidth = sum + Math.max(0, btnCount) * 4 + 6;
             }
           }
           return tbRect.width - contentStart - minTitleWidth - rightPad - nativeButtonsWidth;
@@ -2557,6 +2562,15 @@
               suppressOutsideClose = false;
             }
           }
+        }
+      }
+      const moreActionsBtn = document.querySelector('[data-testid="titlebar-more-actions"][aria-expanded="true"]');
+      if (moreActionsBtn && typeof KeyboardEvent === 'function' && typeof document.dispatchEvent === 'function') {
+        suppressOutsideClose = true;
+        try {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        } finally {
+          suppressOutsideClose = false;
         }
       }
     } catch {
@@ -5183,7 +5197,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '3.0.0',
+    version: '3.0.1',
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();

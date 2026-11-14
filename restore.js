@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { loadAsarEngine, getStateDir } = require('./asar-engine');
+const { isRemotePageTarget } = require('./local-api');
 
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
@@ -41,7 +42,9 @@ async function tryHotDispose() {
       req.setTimeout(2500, () => req.destroy(new Error('timeout')));
       req.on('error', reject);
     });
-    const targets = pages.filter(p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url));
+    const targets = pages.filter(
+      p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url) && !isRemotePageTarget(p)
+    );
     for (const target of targets) {
       const ws = new WebSocket(target.webSocketDebuggerUrl);
       await new Promise((resolve, reject) => {

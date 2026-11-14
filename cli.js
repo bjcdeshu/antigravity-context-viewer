@@ -18,6 +18,7 @@ const { loadAsarEngine, getStateDir } = require('./asar-engine');
 const { install, findAsarPath, tryHotInject } = require('./install');
 const { restore } = require('./restore');
 const { resolvePython } = require('./meter-collector');
+const { isRemotePageTarget, probeLocalAppOrigin } = require('./local-api');
 
 const asar = loadAsarEngine();
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -45,7 +46,15 @@ async function queryLiveWindow() {
       req.setTimeout(2500, () => req.destroy(new Error('timeout')));
       req.on('error', reject);
     });
-    const target = pages.find(p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url));
+    const candidates = pages
+      .filter(p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url) && !isRemotePageTarget(p));
+    let target = null;
+    for (const candidate of candidates) {
+      if (await probeLocalAppOrigin(new URL(candidate.url).origin)) {
+        target = candidate;
+        break;
+      }
+    }
     if (!target) return { running: true, cdpPort: port, pageFound: false };
 
     const ws = new WebSocket(target.webSocketDebuggerUrl);

@@ -1,3 +1,18 @@
+# Release Notes — v3.0.1
+
+## Antigravity Context & Token Viewer v3.0.1
+
+### Highlights
+1. **Antigravity `v2.32.1` Remote-SSH 与多层 `WebContentsView`（`catcherView` / `MCP Apps`）完整适配**
+   - 适配 `v2.32.1` 全新内置的 Remote-SSH（`--agy-backend=ssh`、`dist/remote/windowBackends.js` 独立 `partition` 与 `ssh-prompt` 弹窗）：在 `preload.js`、`meter-main.js`、`local-api.js`、`install.js` 与 `cli.js` 全链路隔离远端 SSH 隧道窗口与本机窗口，避免向 SSH 远端窗口误注入本机账本或因远端 SOCKS 端口不可直连导致 CDP 热挂载报错。
+   - 适配 `v2.32.1` 重构的三层视图栈（`clipView` + `hubWcv` + `catcherView` `data:text/html;charset=utf-8,...`）以及 `plugin://` MCP Apps 微应用视图过滤。
+
+2. **`v2.32.1` 顶栏新增 `[data-testid="titlebar-more-actions"]` 按钮与菜单互斥适配**
+   - 适配 `v2.32.1` 会话顶栏右侧工具簇新增的 `More actions`（含 Open on Phone 等入口）按钮宽度与间距计算，保证窄屏四级渐进折叠阈值精准无遮挡。
+   - 展开上下文或 Token 面板时自动收起处于展开态的 `titlebar-more-actions` 下拉菜单，消除右上角浮层叠压。
+
+---
+
 # Release Notes — v3.0.0
 
 ## Antigravity Context & Token Viewer v3.0.0

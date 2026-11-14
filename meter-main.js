@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 let ipcMain = null;
 let app = null;
+let electronSession = null;
 try {
-  ({ ipcMain, app } = require('electron'));
+  ({ ipcMain, app, session: electronSession } = require('electron'));
 } catch {}
 const { collect, collectTokenHistoryAsync } = require('./meter-collector');
 
@@ -43,8 +44,51 @@ function getMeterSource() {
   }
 }
 
-function isLocalMainFrameSender(event) {
+function isAuxiliaryInternalUrl(rawUrl) {
+  const s = String(rawUrl || '');
+  return s.startsWith('data:') || s.startsWith('plugin:') || s.startsWith('devtools:');
+}
+
+function isLocalWebContentsTarget(wc, opts = {}) {
+  if (!wc || wc.isDestroyed?.()) return false;
   try {
+    const wb = opts.windowBackends ?? require('./remote/windowBackends');
+    if (wb && typeof wb.remoteBackendOf === 'function' && wb.remoteBackendOf(wc)) {
+      return false;
+    }
+  } catch {}
+  try {
+    const defaultSes = opts.defaultSession !== undefined ? opts.defaultSession : electronSession?.defaultSession;
+    if (defaultSes && wc.session && wc.session !== defaultSes) {
+      return false;
+    }
+  } catch {}
+  return true;
+}
+
+function isLocalWindowTarget(win, opts = {}) {
+  if (!win || win.isDestroyed?.()) return false;
+  try {
+    const wb = opts.windowBackends ?? require('./remote/windowBackends');
+    if (wb && typeof wb.isLocalAppWindow === 'function' && !wb.isLocalAppWindow(win)) {
+      return false;
+    }
+  } catch {}
+  try {
+    const directWc = win.webContents;
+    if (directWc && !isLocalWebContentsTarget(directWc, opts)) {
+      return false;
+    }
+  } catch {}
+  return true;
+}
+
+exports.isLocalWebContentsTarget = isLocalWebContentsTarget;
+exports.isLocalWindowTarget = isLocalWindowTarget;
+
+function isLocalMainFrameSender(event, opts = {}) {
+  try {
+    if (event?.sender && !isLocalWebContentsTarget(event.sender, opts)) return null;
     const rawUrl = event?.senderFrame?.url || event?.sender?.getURL?.() || '';
     const url = new URL(rawUrl);
     if (url.protocol !== 'https:' || url.hostname !== '127.0.0.1') return null;
@@ -54,6 +98,8 @@ function isLocalMainFrameSender(event) {
     return null;
   }
 }
+
+exports.isLocalMainFrameSender = isLocalMainFrameSender;
 
 function resolveTargetWindow(sender) {
   try {
@@ -71,11 +117,11 @@ function resolveTargetWindow(sender) {
   return null;
 }
 
-function getWindowWebContents(win) {
-  if (!win || win.isDestroyed?.()) return null;
+function getWindowWebContents(win, opts = {}) {
+  if (!isLocalWindowTarget(win, opts)) return null;
   try {
     const direct = win.webContents;
-    if (direct && !direct.isDestroyed?.() && !String(direct.getURL?.() || '').startsWith('data:')) {
+    if (direct && isLocalWebContentsTarget(direct, opts) && !isAuxiliaryInternalUrl(direct.getURL?.())) {
       return direct;
     }
   } catch {}
@@ -83,7 +129,7 @@ function getWindowWebContents(win) {
     const utils = require('./utils');
     if (typeof utils.getHubWebContents === 'function') {
       const hubWc = utils.getHubWebContents(win);
-      if (hubWc && !hubWc.isDestroyed?.() && !String(hubWc.getURL?.() || '').startsWith('data:')) {
+      if (hubWc && isLocalWebContentsTarget(hubWc, opts) && !isAuxiliaryInternalUrl(hubWc.getURL?.())) {
         return hubWc;
       }
     }
@@ -93,13 +139,13 @@ function getWindowWebContents(win) {
     if (Array.isArray(children)) {
       for (const view of children) {
         const wc = view?.webContents;
-        if (wc && !wc.isDestroyed?.() && /^https:\/\/127\.0\.0\.1:\d+\//.test(String(wc.getURL?.() || ''))) {
+        if (wc && isLocalWebContentsTarget(wc, opts) && /^https:\/\/127\.0\.0\.1:\d+\//.test(String(wc.getURL?.() || ''))) {
           return wc;
         }
       }
       for (const view of children) {
         const wc = view?.webContents;
-        if (wc && !wc.isDestroyed?.() && !String(wc.getURL?.() || '').startsWith('data:')) {
+        if (wc && isLocalWebContentsTarget(wc, opts) && !isAuxiliaryInternalUrl(wc.getURL?.())) {
           return wc;
         }
       }
@@ -183,7 +229,7 @@ function registerIpcOnce() {
 
 async function ensureMeterInjected(win, options = {}) {
   try {
-    if (!win || win.isDestroyed?.()) return false;
+    if (!isLocalWindowTarget(win)) return false;
     const wc = getWindowWebContents(win);
     const url = wc && !wc.isDestroyed?.() ? (wc.getURL?.() || '') : '';
     if (!wc || wc.isDestroyed?.() || !/^https:\/\/127\.0\.0\.1:\d+\//.test(url)) {
@@ -269,7 +315,7 @@ function bindWindowWebContents(win) {
 
 exports.installContextMeter = function (win) {
   registerIpcOnce();
-  if (!win || win.isDestroyed?.()) return;
+  if (!isLocalWindowTarget(win)) return;
 
   if (!boundWindows.has(win)) {
     boundWindows.add(win);
@@ -325,10 +371,15 @@ try {
     };
     app.on('browser-window-created', onWindowCreated);
     app.on('base-window-created', onWindowCreated);
+    const listLocalHubWindows = utils => {
+      if (typeof utils.getLocalHubWindows === 'function') return utils.getLocalHubWindows();
+      if (typeof utils.getHubWindows === 'function') return utils.getHubWindows().filter(w => isLocalWindowTarget(w));
+      return [];
+    };
     app.on('activate', () => {
       try {
         const utils = require('./utils');
-        const wins = typeof utils.getHubWindows === 'function' ? utils.getHubWindows() : [];
+        const wins = listLocalHubWindows(utils);
         for (const w of wins) {
           exports.installContextMeter(w);
           void ensureMeterInjected(w, { force: true });
@@ -340,7 +391,7 @@ try {
         const utils = require('./utils');
         setTimeout(() => {
           try {
-            const wins = typeof utils.getHubWindows === 'function' ? utils.getHubWindows() : [];
+            const wins = listLocalHubWindows(utils);
             for (const w of wins) {
               exports.installContextMeter(w);
               void ensureMeterInjected(w, { force: true });

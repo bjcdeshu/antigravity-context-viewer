@@ -7,6 +7,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { loadAsarEngine, getStateDir } = require('./asar-engine');
 const { canRecoverDriftedMeterArchive } = require('./restore');
+const { isRemotePageTarget, probeLocalAppOrigin } = require('./local-api');
 
 const asar = loadAsarEngine();
 const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
@@ -72,7 +73,18 @@ async function tryHotInject(options = {}) {
       req.setTimeout(2500, () => req.destroy(new Error('timeout')));
       req.on('error', reject);
     });
-    const targets = pages.filter(p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url));
+    const candidateTargets = pages.filter(
+      p => p.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\//.test(p.url) && !isRemotePageTarget(p)
+    );
+    const targets = [];
+    const verifiedOrigins = new Map();
+    for (const candidate of candidateTargets) {
+      const origin = new URL(candidate.url).origin;
+      if (!verifiedOrigins.has(origin)) {
+        verifiedOrigins.set(origin, Boolean(await probeLocalAppOrigin(origin)));
+      }
+      if (verifiedOrigins.get(origin)) targets.push(candidate);
+    }
     if (!targets.length) return false;
 
     const stateDir = getStateDir();
@@ -228,10 +240,10 @@ async function install(options = {}) {
     const preloadMarker = '// Context Meter v2: narrow read-only conversation scan API';
     let preloadContent = fs.readFileSync(preloadPath, 'utf8');
     if (preloadContent.includes(preloadMarker)) {
-      const regex = /\r?\n?\/\/ Context Meter v2: narrow read-only conversation scan API\r?\nelectron_1\.contextBridge\.exposeInMainWorld\("contextMeterAPI",\s*\{[\s\S]*?\}\);\r?\n?/g;
+      const regex = /\r?\n?\/\/ Context Meter v2: narrow read-only conversation scan API\r?\n(?:if \(!process\.argv\.some\([^)]*\)\) \{\r?\n\s*)?electron_1\.contextBridge\.exposeInMainWorld\("contextMeterAPI",\s*\{[\s\S]*?\}\);(?:\r?\n\})?\r?\n?/g;
       preloadContent = preloadContent.replace(regex, '\n');
     }
-    preloadContent += `\n${preloadMarker}\nelectron_1.contextBridge.exposeInMainWorld("contextMeterAPI", { scan: (id, force) => electron_1.ipcRenderer.invoke("context-meter:scan", id, force === true), getTokenHistory: (force) => electron_1.ipcRenderer.invoke("context-meter:token-history", force === true), syncOverlay: (opts) => electron_1.ipcRenderer.invoke("context-meter:sync-overlay", opts) });\n`;
+    preloadContent += `\n${preloadMarker}\nif (!process.argv.some((a) => a === "--agy-backend=ssh")) {\n  electron_1.contextBridge.exposeInMainWorld("contextMeterAPI", { scan: (id, force) => electron_1.ipcRenderer.invoke("context-meter:scan", id, force === true), getTokenHistory: (force) => electron_1.ipcRenderer.invoke("context-meter:token-history", force === true), syncOverlay: (opts) => electron_1.ipcRenderer.invoke("context-meter:sync-overlay", opts) });\n}\n`;
     fs.writeFileSync(preloadPath, preloadContent);
 
     const additions = ['meter-main.js', 'meter-core.js', 'meter-renderer.js', 'meter-collector.js', 'attachment_scan.py'];

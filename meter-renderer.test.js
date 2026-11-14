@@ -328,7 +328,7 @@ test('6 independent custom color slots support custom values, reset to theme def
 test('window controls overlay spacer, convPane flex-grow self-healing, and clean dispose', () => {
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
-  assert.equal(api.version, '3.0.0');
+  assert.equal(api.version, require('./package.json').version);
   api.dispose();
 });
 
@@ -1490,6 +1490,47 @@ test('v3.0.0 Hot-Reload & ARIA Regressions (#12): legacy v2.9 IPC unattributed m
   // Explicit forced sync (force = true) still runs when requested
   await api.syncTokenHistoryForTest(true);
   assert.equal(ipcCalls, 2);
+
+  api.dispose();
+});
+
+test('v3.0.1: dismisses v2.32.1 titlebar-more-actions menu on panel open without closing newly opened meter panel', () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  assert.equal(api.version, '3.0.1');
+  h.finishScan();
+
+  let escapeDispatched = 0;
+  const origQuerySelector = typeof h.sandbox.document.querySelector === 'function'
+    ? h.sandbox.document.querySelector.bind(h.sandbox.document)
+    : () => null;
+  const origDispatchEvent = typeof h.sandbox.document.dispatchEvent === 'function'
+    ? h.sandbox.document.dispatchEvent.bind(h.sandbox.document)
+    : null;
+  h.sandbox.document.querySelector = sel => {
+    if (sel === '[data-testid="titlebar-more-actions"][aria-expanded="true"]') {
+      return { getAttribute: name => (name === 'aria-expanded' ? 'true' : null) };
+    }
+    return origQuerySelector(sel);
+  };
+  h.sandbox.KeyboardEvent = class KeyboardEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.key = init.key || '';
+      this.bubbles = Boolean(init.bubbles);
+    }
+  };
+  h.sandbox.document.dispatchEvent = ev => {
+    if (ev && ev.type === 'keydown' && ev.key === 'Escape') {
+      escapeDispatched += 1;
+      h.docListeners.get('keydown')?.(ev);
+    }
+    return origDispatchEvent ? origDispatchEvent(ev) : true;
+  };
+
+  h.elements.get('badge').click();
+  assert.equal(escapeDispatched, 1, 'Opening Context panel must dismiss expanded v2.32.1 titlebar-more-actions menu');
+  assert.equal(h.elements.get('panel').hidden, false, 'Context panel must remain open after dismissing native menu');
 
   api.dispose();
 });
