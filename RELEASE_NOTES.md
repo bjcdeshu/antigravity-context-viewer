@@ -1,3 +1,21 @@
+# Release Notes — v3.1.0
+
+## Antigravity Context & Token Viewer v3.1.0
+
+### Highlights
+1. **全链路后台 `worker_threads` 异步隔离（零主线程事件循环阻塞）**
+   - `meter-collector.js` 内置免外部文件依赖的 `eval: true` 工作线程引导器（启动时一次性捕获 `meter-core.js`、`meter-collector.js` 与 `attachment_scan.py` 源码快照，彻底规避热覆盖 `app.asar` 后的归档偏移漂移风险），且在工作线程内将实时会话 `scan` 与全量账本 `tokenHistory` 队列解耦，互不阻塞。
+   - 将历史日志扫描、JSONL 解析、多模型 RPC 归因合并、会话详情 `collect()` 与磁盘原子写入全部移出 Electron 主进程，并通过预序列化 JSON 字符串跨 IPC 直传渲染层（消除主进程大对象 `Structured Clone` 开销）；空闲自动 `unref` 与定时回收，并在极端环境下提供 `fs.promises` 分片让出式（`4ms` 时间片）无损异步回退。
+
+2. **持久化增量转录索引 (`transcript_scan_index_v1.json`) 与安全字节偏移尾读**
+   - 新增紧凑磁盘索引（含 IANA/DST 时区签名校验、日期字典编码与步级日期游程压缩），对未变动的历史会话与 `.pb` / 子代理拓扑实现 **`0` 字节重读**；在 `570` 个会话（`138.6 MB` 历史日志）实机环境下，冷启动磁盘扫描耗时由 **`1,616 ms` 降至 `~28–42 ms`**，热重扫降至 **`~18–21 ms`**，主线程事件循环最大阻塞降至 **`< 3.1 ms`**。
+   - 对增长中的活跃 `transcript.jsonl` 采用基于首部哈希 + 末尾 `\n` 锚点校验的字节偏移增量尾读（`Buffer` 级 `0x0A` 切分，免疫多字节 UTF-8 截断、无尾换行补全双计及日志轮转/重写）。
+
+3. **多进程缓存并发写入与归档落盘自愈加固**
+   - 移除 `atomicWriteJsonSync` 在 Windows 文件锁冲突时的非原子 `copyFileSync` 回退，改为带退避的原子 `rename` 重试并对历史归档启用 `fsync`；对破损或 `0` 字节归档增加首次防误覆写 + 连续两次破损自动隔离为 `.corrupt-<ts>` 重建自愈；`model_attribution_cache_v3.json` 增加跨进程变更检测合并与内存 `(size, mtime)` 缓存，`scanFiles()` 与 Python 探测全面异步化。
+
+---
+
 # Release Notes — v3.0.1
 
 ## Antigravity Context & Token Viewer v3.0.1

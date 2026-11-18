@@ -977,6 +977,213 @@ test('v3.0.1: Antigravity v2.32.1 Remote-SSH window isolation, catcherView/plugi
   assert.equal(isRemotePageTarget({ title: '【Antigravity】Swarm讨论 - Antigravity' }), false);
 });
 
+test('v3.1.0: incremental byte-offset tail oracle (UTF-8 multibyte, CRLF, unterminated tail, rotation, truncation) & corrupt archive guard', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { collectTokenHistory, __test } = require('./meter-collector');
+
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v31-oracle-'));
+  try {
+    const convId = '12345678-1234-4234-8234-1234567890ab';
+    const agDir = path.join(tmpHome, '.gemini', 'antigravity');
+    const logDir = path.join(agDir, 'brain', convId, '.system_generated', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const tFile = path.join(logDir, 'transcript.jsonl');
+
+    const mkUser = (idx, txt, iso) => JSON.stringify({
+      step_index: idx,
+      type: 'USER_INPUT',
+      created_at: iso,
+      content: `<USER_REQUEST>${txt}</USER_REQUEST>`
+    });
+    const mkPlan = (idx, inp, cac, out, iso, note) => JSON.stringify({
+      step_index: idx,
+      type: 'PLANNER_RESPONSE',
+      created_at: iso,
+      note,
+      metadata: {
+        created_at: iso,
+        token_usage: { input_tokens: inp, cache_read_tokens: cac, output_tokens: out }
+      }
+    });
+
+    for (const chunkSz of [7, 31, 256]) {
+      __test.resetState();
+      __test.setChunkSize(chunkSz);
+      try { fs.unlinkSync(path.join(agDir, 'transcript_scan_index_v1.json')); } catch {}
+      try { fs.unlinkSync(path.join(agDir, 'token_usage_archive_v3.json')); } catch {}
+
+      // Step A: initial file with multi-byte Chinese/Emoji, CRLF, and UNTERMINATED last line
+      const l0 = mkUser(0, '测试多字节🚀上下文增量索引边界校验', '2026-11-17T02:00:00Z');
+      const l1 = mkPlan(1, 5000, 20000, 800, '2026-11-17T02:01:00Z', '中文字段✨'.repeat(8));
+      const l2Incomplete = mkPlan(2, 6000, 25000, 900, '2026-11-17T02:02:00Z', '未换行末尾行🔥');
+      fs.writeFileSync(tFile, `${l0}\r\n${l1}\r\n${l2Incomplete}`, 'utf8');
+
+      const rA = collectTokenHistory({ homeDir: tmpHome, force: true });
+      assert.equal(rA.summary.grandTotalTokens, (5000 + 20000 + 800) + (6000 + 25000 + 900));
+      assert.equal(rA.dailyMap['2026-11-17'].steps, 2);
+
+      // Step B: complete the unterminated line (\r\n) and append a new step on next day (without trailing \n)
+      const l3 = mkPlan(3, 7000, 30000, 1000, '2026-11-18T03:00:00Z', '跨天增量追加🎯');
+      // Advance mtime slightly so filesystem stat reflects change deterministically
+      const nextContent = `${l0}\r\n${l1}\r\n${l2Incomplete}\r\n${l3}`;
+      fs.writeFileSync(tFile, nextContent, 'utf8');
+      const bumpedTime = new Date(Date.now() + 2000);
+      fs.utimesSync(tFile, bumpedTime, bumpedTime);
+
+      const rB = collectTokenHistory({ homeDir: tmpHome, force: true });
+      const statsB = __test.getLastScanStats();
+      assert.equal(statsB.filesTail, 1, `Expected tail read for chunkSize=${chunkSz}`);
+
+      // Verify I3 Oracle: incremental result must deep-equal a clean rebuild-from-scratch parse
+      try { fs.unlinkSync(path.join(agDir, 'token_usage_archive_v3.json')); } catch {}
+      const rOracle = collectTokenHistory({ homeDir: tmpHome, force: true, rebuildIndex: true });
+      assert.deepEqual(rB.dailyMap, rOracle.dailyMap);
+      assert.equal(rB.summary.grandTotalTokens, rOracle.summary.grandTotalTokens);
+      assert.deepEqual(rB.topSessions, rOracle.topSessions);
+    }
+
+    __test.setChunkSize(0);
+
+    // Step C: Rotate-and-regrow past prev.o (anchor mismatch must fall back to FULL file read cleanly)
+    try { fs.unlinkSync(path.join(agDir, 'token_usage_archive_v3.json')); } catch {}
+    const rotated = [
+      mkUser(0, '全新轮转日志但体积更大', '2026-11-18T05:00:00Z'),
+      mkPlan(1, 1000, 2000, 300, '2026-11-18T05:01:00Z', '填充'.repeat(300))
+    ].join('\n') + '\n';
+    fs.writeFileSync(tFile, rotated, 'utf8');
+    const rotTime = new Date(Date.now() + 5000);
+    fs.utimesSync(tFile, rotTime, rotTime);
+
+    const rRot = collectTokenHistory({ homeDir: tmpHome, force: true });
+    assert.equal(__test.getLastScanStats().filesFull, 1, 'Anchor mismatch must trigger FULL re-read');
+    assert.equal(rRot.summary.grandTotalTokens, 3300);
+
+    // Step D: Corrupt non-empty OR 0-byte token_usage_archive_v3.json:
+    //   - 1st strike preserves the torn file without clobbering
+    //   - 2nd consecutive strike quarantines to .corrupt-<ts> and self-heals
+    const archivePath = path.join(agDir, 'token_usage_archive_v3.json');
+    const corruptContent = '{"schemaVersion":3,"dailyMap":{"2026-10-01":{"total":999999'; // torn JSON
+    fs.writeFileSync(archivePath, corruptContent, 'utf8');
+    collectTokenHistory({ homeDir: tmpHome, force: true });
+    assert.equal(fs.readFileSync(archivePath, 'utf8'), corruptContent, '1st strike must not clobber torn archive');
+
+    collectTokenHistory({ homeDir: tmpHome, force: true });
+    const corruptBackups = fs.readdirSync(agDir).filter(n => n.startsWith('token_usage_archive_v3.json.corrupt-'));
+    assert.equal(corruptBackups.length, 1, '2nd strike must quarantine torn archive to .corrupt-<ts>');
+    assert.equal(fs.readFileSync(path.join(agDir, corruptBackups[0]), 'utf8'), corruptContent);
+    const healedArchive = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
+    assert.ok(healedArchive.schemaVersion >= 2);
+    assert.equal(healedArchive.dailyMap['2026-11-18'].total, 3300);
+
+    // 0-byte v3 archive is also guarded on 1st strike
+    fs.writeFileSync(archivePath, '', 'utf8');
+    collectTokenHistory({ homeDir: tmpHome, force: true });
+    assert.equal(fs.readFileSync(archivePath, 'utf8'), '', '1st strike on 0-byte v3 archive must preserve file');
+  } finally {
+    __test.resetState();
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('v3.1.0: eval-bootstrapped Worker, zero-byte cold restart, worker/fallback/sync parity, failSpawn fallback, and clean child exit', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFile } = require('node:child_process');
+  const {
+    collectTokenHistory,
+    collectTokenHistoryJsonAsync,
+    __test
+  } = require('./meter-collector');
+
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v31-worker-'));
+  try {
+    const agDir = path.join(tmpHome, '.gemini', 'antigravity');
+    const rootId = 'aaaa1111-1111-4111-8111-111111111111';
+    const childId = 'bbbb2222-2222-4222-8222-222222222222';
+    const rootLogDir = path.join(agDir, 'brain', rootId, '.system_generated', 'logs');
+    const subMetaDir = path.join(agDir, 'brain', rootId, '.system_generated', 'subagents');
+    const childLogDir = path.join(agDir, 'brain', childId, '.system_generated', 'logs');
+    fs.mkdirSync(rootLogDir, { recursive: true });
+    fs.mkdirSync(subMetaDir, { recursive: true });
+    fs.mkdirSync(childLogDir, { recursive: true });
+
+    fs.writeFileSync(path.join(subMetaDir, 'sub1.json'), JSON.stringify({ conversationId: childId }), 'utf8');
+    fs.writeFileSync(path.join(rootLogDir, 'transcript.jsonl'), [
+      JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: '2026-11-18T01:00:00Z', content: '<USER_REQUEST>主任务测试</USER_REQUEST>' }),
+      JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', metadata: { created_at: '2026-11-18T01:01:00Z', token_usage: { input_tokens: 10000, cache_read_tokens: 40000, output_tokens: 2000 } } })
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(path.join(childLogDir, 'transcript.jsonl'), [
+      JSON.stringify({ step_index: 0, type: 'PLANNER_RESPONSE', metadata: { created_at: '2026-11-18T01:02:00Z', token_usage: { input_tokens: 4000, cache_read_tokens: 10000, output_tokens: 1000 } } })
+    ].join('\n') + '\n', 'utf8');
+
+    // 1) Worker mode initial build
+    __test.resetState();
+    const wBuild = await collectTokenHistoryJsonAsync({ homeDir: tmpHome, force: true });
+    assert.equal(wBuild.stats.mode, 'worker');
+    assert.equal(wBuild.stats.filesFull, 2);
+    const wObj = JSON.parse(wBuild.json);
+    assert.equal(wObj.summary.grandTotalTokens, 67000);
+    assert.equal(wObj.childToRoot[childId], rootId);
+    assert.match(String(wObj.summary.firstInstallDate || ''), /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(String(wObj.updatedAt || ''), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    assert.equal(wObj.topSessions[0].childCount, 1);
+
+    // 2) Cold restart simulation: terminate worker & clear RAM state -> reloads index with 0 bytes read
+    await __test.shutdownWorker();
+    __test.resetState();
+    const wCold = await collectTokenHistoryJsonAsync({ homeDir: tmpHome, force: true });
+    assert.equal(wCold.stats.mode, 'worker');
+    assert.equal(wCold.stats.sweep, 'fast');
+    assert.equal(wCold.stats.filesHit, 2);
+    assert.equal(wCold.stats.bytesRead, 0);
+
+    // 3) Parity across Worker, Fallback-Async (useWorker: false), failSpawn recovery, and Sync
+    __test.setWorkerMode('failSpawn');
+    const fbSpawn = await collectTokenHistoryJsonAsync({ homeDir: tmpHome, force: true });
+    assert.equal(fbSpawn.stats.mode, 'fallback-async');
+
+    __test.setWorkerMode('off');
+    const fbOff = await collectTokenHistoryJsonAsync({ homeDir: tmpHome, force: true });
+    assert.equal(fbOff.stats.mode, 'fallback-async');
+
+    const syncObj = collectTokenHistory({ homeDir: tmpHome, force: true });
+    for (const candidateJson of [wCold.json, fbSpawn.json, fbOff.json]) {
+      const parsed = JSON.parse(candidateJson);
+      assert.deepEqual(parsed.dailyMap, syncObj.dailyMap);
+      assert.deepEqual(parsed.childToRoot, syncObj.childToRoot);
+      assert.deepEqual(parsed.sessionRollups, syncObj.sessionRollups);
+      assert.deepEqual(parsed.summary, syncObj.summary);
+    }
+
+    // 4) Standalone child process awaiting collectTokenHistoryAsync exits 0 promptly (unref works)
+    __test.setWorkerMode('auto');
+    const collectorPath = path.join(__dirname, 'meter-collector.js');
+    const exitResult = await new Promise((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          '-e',
+          `const { collectTokenHistoryJsonAsync } = require(${JSON.stringify(collectorPath)});` +
+          `collectTokenHistoryJsonAsync({ homeDir: ${JSON.stringify(tmpHome)}, force: true }).then(r => console.log(r.stats.mode + ':' + r.stats.bytesRead));`
+        ],
+        { timeout: 6000, windowsHide: true },
+        (err, stdout) => {
+          if (err) reject(err);
+          else resolve(stdout.trim());
+        }
+      );
+    });
+    assert.equal(exitResult, 'worker:0');
+  } finally {
+    await __test.shutdownWorker();
+    __test.resetState();
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 
 
 

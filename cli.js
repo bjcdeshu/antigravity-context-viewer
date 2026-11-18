@@ -102,16 +102,22 @@ async function ensureLiveBridgeIfNeeded(options = {}) {
   const live = await queryLiveWindow();
   if (!live.running || !live.pageFound) return;
   if (live.hasIpcBridge && !options.allowAlongsideLegacyIpc) return;
+  const expectedBridgeVersion = require('./package.json').version || '3.1.0';
   const stateDir = getStateDir();
-  const liveSessionPath = fs.existsSync(path.join(stateDir, '.live-session.json'))
-    ? path.join(stateDir, '.live-session.json')
+  const stateLivePath = path.join(stateDir, '.live-session.json');
+  const liveSessionPath = fs.existsSync(stateLivePath)
+    ? stateLivePath
     : path.join(__dirname, '.live-session.json');
   let alive = false;
   if (fs.existsSync(liveSessionPath)) {
     try {
       const info = JSON.parse(fs.readFileSync(liveSessionPath, 'utf8'));
       process.kill(info.pid, 0);
-      if (!info.watchdog || (live.origin && info.origin !== live.origin)) {
+      if (
+        !info.watchdog ||
+        info.bridgeVersion !== expectedBridgeVersion ||
+        (live.origin && info.origin !== live.origin)
+      ) {
         try { process.kill(info.pid); } catch {}
       } else {
         alive = await new Promise(resolve => {
@@ -130,13 +136,33 @@ async function ensureLiveBridgeIfNeeded(options = {}) {
     } catch {}
   }
   if (!alive) {
+    const spawnStamp = Date.now();
     const child = spawn(process.execPath, [path.join(__dirname, 'live-host.js')], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true
     });
     child.unref();
-    await new Promise(r => setTimeout(r, 800));
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 100));
+      try {
+        const candidatePath = fs.existsSync(stateLivePath)
+          ? stateLivePath
+          : path.join(__dirname, '.live-session.json');
+        if (!fs.existsSync(candidatePath)) continue;
+        const info = JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
+        if (
+          info &&
+          info.bridgeVersion === expectedBridgeVersion &&
+          (!live.origin || info.origin === live.origin) &&
+          Number(info.startedAt || 0) >= spawnStamp - 500
+        ) {
+          process.kill(info.pid, 0);
+          break;
+        }
+      } catch {}
+    }
   }
 }
 

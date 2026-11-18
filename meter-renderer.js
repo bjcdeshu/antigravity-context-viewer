@@ -3742,17 +3742,18 @@
       }
       if (!appliedLive && hasIpc) {
         const res = await window.contextMeterAPI.getTokenHistory(Boolean(force));
-        if (res?.ok && res.data) {
-          const ipcHasRollups = Boolean(res.data.sessionRollups && typeof res.data.sessionRollups === 'object');
+        const ipcData = res?.ok ? (typeof res.json === 'string' ? JSON.parse(res.json) : res.data) : null;
+        if (ipcData) {
+          const ipcHasRollups = Boolean(ipcData.sessionRollups && typeof ipcData.sessionRollups === 'object');
           if (ipcHasRollups) {
             legacyIpcDetected = false;
           } else if (ANTIGRAVITY_TOKEN_DATA.sessionRollups || (Number(ANTIGRAVITY_TOKEN_DATA.pricingSchemaVersion) || 0) >= 3) {
             // 未重启的 v2.9 主进程每次后台轮询都会用旧 schema 重写磁盘归档；检测到后跳过每 15 秒的自动后台 IPC
             legacyIpcDetected = true;
           }
-          applyTokenHistoryPayload(res.data);
+          applyTokenHistoryPayload(ipcData);
           window.__AGContextMeterHistory = {
-            ...res.data,
+            ...ipcData,
             ...(ANTIGRAVITY_TOKEN_DATA.pricingSchemaVersion ? { pricingSchemaVersion: ANTIGRAVITY_TOKEN_DATA.pricingSchemaVersion } : {}),
             dailyMap: ANTIGRAVITY_TOKEN_DATA.dailyMap,
             cascadeModelConfigs: ANTIGRAVITY_TOKEN_DATA.cascadeModelConfigs,
@@ -5136,9 +5137,11 @@
       } else throw new Error('完整重启 Antigravity 后启用附件扫描');
       if (generation !== state.generation || state.disposed) return;
       if (!result?.ok) throw new Error(result?.error || '扫描未返回有效结果');
-      state.scan = result.data; state.scanError = '';
+      const scanData = typeof result.json === 'string' ? JSON.parse(result.json) : result.data;
+      if (!scanData) throw new Error('扫描未返回有效结果');
+      state.scan = scanData; state.scanError = '';
       // 当全量轨迹扫描返回 turnDateByKey 时，回填先前仅按今日兜底计价的历史轮次真实日期
-      const scannedDates = result.data?.session?.turnDateByKey;
+      const scannedDates = scanData?.session?.turnDateByKey;
       if (scannedDates && typeof scannedDates === 'object' && state.sessionSteps.size > 0) {
         for (const [key, step] of state.sessionSteps) {
           if (step.explicitDate) continue;
@@ -5149,9 +5152,9 @@
           }
         }
       }
-      if (result.data.scannedAt >= state.requestAt && result.data.latest) {
+      if (scanData.scannedAt >= state.requestAt && scanData.latest) {
         const prevLatest = state.latest;
-        const nextLatest = { ...result.data.latest };
+        const nextLatest = { ...scanData.latest };
         // 热重载兼容：未重启的 v2.9 主进程 scan() 缺少 rawModel / tokenBreakdown，且无法识别 M525..528 / M667 / M681
         if (!nextLatest.rawModel) {
           if (typeof nextLatest.model === 'string' && nextLatest.model.startsWith('MODEL_')) {
@@ -5170,10 +5173,10 @@
           if (resolvedLbl) nextLatest.model = resolvedLbl;
         }
         state.latest = nextLatest;
-        state.requestAt = result.data.scannedAt;
+        state.requestAt = scanData.scannedAt;
       }
       state.latest = withStepError(state.latest);
-      renderFiles(result.data.session);
+      renderFiles(scanData.session);
     } catch (e) { if (generation === state.generation && !state.disposed) state.scanError = e.message; }
     finally { if (generation === state.generation && !state.disposed) { state.scanBusy = false; state.scanNext = Date.now() + (document.hidden ? 60000 : 20000); render(); } }
   }
@@ -5197,7 +5200,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '3.0.1',
+    version: '3.1.0',
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();

@@ -7,15 +7,18 @@ let electronSession = null;
 try {
   ({ ipcMain, app, session: electronSession } = require('electron'));
 } catch {}
-const { collect, collectTokenHistoryAsync } = require('./meter-collector');
+const { collectJsonAsync, collectTokenHistoryJsonAsync } = require('./meter-collector');
 
+let cachedProxyConfig = undefined;
 function ensureProxyEnvironment(targetEnv = process.env) {
   try {
-    const os = require('os');
-    const localBase = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    const cfgPath = path.join(localBase, 'AntigravityContextMeter', 'proxy.json');
-    if (!fs.existsSync(cfgPath)) return;
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    if (cachedProxyConfig === undefined) {
+      const os = require('os');
+      const localBase = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      const cfgPath = path.join(localBase, 'AntigravityContextMeter', 'proxy.json');
+      cachedProxyConfig = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : null;
+    }
+    const cfg = cachedProxyConfig;
     if (!cfg || !cfg.httpProxy) return;
     const noProxy = cfg.noProxy || 'localhost,127.0.0.1,::1,127.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,<-loopback>';
     for (const k of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy']) {
@@ -34,15 +37,19 @@ function ensureProxyEnvironment(targetEnv = process.env) {
 ensureProxyEnvironment(process.env);
 exports.ensureProxyEnvironment = ensureProxyEnvironment;
 
+let cachedMeterSource = '';
 function getMeterSource() {
+  if (cachedMeterSource) return cachedMeterSource;
   try {
     const coreCode = fs.readFileSync(path.join(__dirname, 'meter-core.js'), 'utf8');
     const rendererCode = fs.readFileSync(path.join(__dirname, 'meter-renderer.js'), 'utf8');
-    return `${coreCode}\n${rendererCode}\ntrue;`;
+    cachedMeterSource = `${coreCode}\n${rendererCode}\ntrue;`;
+    return cachedMeterSource;
   } catch (e) {
     return '';
   }
 }
+getMeterSource();
 
 function isAuxiliaryInternalUrl(rawUrl) {
   const s = String(rawUrl || '');
@@ -182,15 +189,23 @@ function registerIpcOnce() {
   ipcMain.handle('context-meter:scan', async (event, id, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
-    try { return { ok: true, data: await collect(url.origin, id, { force: force === true }) }; }
-    catch (e) { return { ok: false, error: e.message }; }
+    try {
+      const out = await collectJsonAsync(url.origin, id, { force: force === true });
+      return { ok: true, json: out.json, stats: out.stats };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   ipcMain.handle('context-meter:token-history', async (event, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
-    try { return { ok: true, data: await collectTokenHistoryAsync({ origin: url.origin, force: force === true }) }; }
-    catch (e) { return { ok: false, error: e.message }; }
+    try {
+      const out = await collectTokenHistoryJsonAsync({ origin: url.origin, force: force === true });
+      return { ok: true, json: out.json, stats: out.stats };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   ipcMain.handle('context-meter:sync-overlay', async (event, options) => {
@@ -227,6 +242,8 @@ function registerIpcOnce() {
   });
 }
 
+const inflightInjections = new WeakMap();
+
 async function ensureMeterInjected(win, options = {}) {
   try {
     if (!isLocalWindowTarget(win)) return false;
@@ -248,19 +265,34 @@ async function ensureMeterInjected(win, options = {}) {
       return false;
     }
 
-    if (!options.force) {
-      try {
-        const alive = await wc.executeJavaScript(
-          'Boolean(window.__AGContextMeter && document.getElementById("ag-context-meter") && (window.__AGContextMeter.ensureAlive ? window.__AGContextMeter.ensureAlive() : true))'
-        );
-        if (alive === true) return true;
-      } catch {}
-    }
+    const existing = inflightInjections.get(wc);
+    if (existing && !options.force) return await existing;
 
-    const runtimeSource = getMeterSource();
-    if (!runtimeSource) return false;
-    await wc.executeJavaScript(runtimeSource);
-    return true;
+    const runInject = (async () => {
+      if (existing) {
+        try { await existing; } catch {}
+      }
+      if (wc.isDestroyed?.()) return false;
+      if (!options.force) {
+        try {
+          const alive = await wc.executeJavaScript(
+            'Boolean(window.__AGContextMeter && document.getElementById("ag-context-meter") && (window.__AGContextMeter.ensureAlive ? window.__AGContextMeter.ensureAlive() : true))'
+          );
+          if (alive === true) return true;
+        } catch {}
+      }
+      const runtimeSource = getMeterSource();
+      if (!runtimeSource) return false;
+      await wc.executeJavaScript(runtimeSource);
+      return true;
+    })();
+
+    inflightInjections.set(wc, runInject);
+    try {
+      return await runInject;
+    } finally {
+      if (inflightInjections.get(wc) === runInject) inflightInjections.delete(wc);
+    }
   } catch (error) {
     const attempt = Number(options.attempt || 0);
     const delays = [350, 1000, 2500];

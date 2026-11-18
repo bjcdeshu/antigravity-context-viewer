@@ -93,7 +93,7 @@ async function tryHotInject(options = {}) {
       : path.join(__dirname, '.live-session.json');
     const liveInfo = fs.existsSync(livePath) ? JSON.parse(fs.readFileSync(livePath, 'utf8')) : null;
     let bundle = null;
-    let historyData = null;
+    let historyJson = '';
 
     for (const target of targets) {
       const ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -131,11 +131,12 @@ async function tryHotInject(options = {}) {
           .map(f => fs.readFileSync(path.join(__dirname, f), 'utf8'))
           .join('\n');
         try {
-          const { collectTokenHistoryAsync } = require('./meter-collector');
-          historyData = await collectTokenHistoryAsync({
+          const { collectTokenHistoryJsonAsync } = require('./meter-collector');
+          const res = await collectTokenHistoryJsonAsync({
             origin: new URL(target.url).origin,
             force: !onlyIfMissing
           });
+          historyJson = res?.json || '';
         } catch {}
       }
 
@@ -146,8 +147,8 @@ async function tryHotInject(options = {}) {
       const liveAssign = liveAlive
         ? `window.__AGContextMeterLive=${JSON.stringify({ port: liveInfo.port, token: liveInfo.token, preferLive: true })};`
         : 'window.__AGContextMeterLive=null;';
-      const historyAssign = historyData
-        ? `window.__AGContextMeterHistory=${JSON.stringify(historyData)};`
+      const historyAssign = historyJson
+        ? `window.__AGContextMeterHistory=${historyJson};`
         : '';
 
       if (liveAssign) await evalExpr(liveAssign);

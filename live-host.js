@@ -6,7 +6,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { connect } = require('./local-api');
-const { collect, collectTokenHistoryAsync } = require('./meter-collector');
+const { collectJsonAsync, collectTokenHistoryJsonAsync } = require('./meter-collector');
 const { getStateDir } = require('./asar-engine');
 const { tryHotInject } = require('./install');
 (async () => {
@@ -29,17 +29,18 @@ const { tryHotInject } = require('./install');
     req.on('end', async () => {
       try {
         const request = body ? JSON.parse(body) : {};
-        const data = req.url === '/token-history'
-          ? await collectTokenHistoryAsync({ origin: api.origin, force: request.force === true })
-          : await collect(api.origin, request.id, { force: request.force === true });
+        const out = req.url === '/token-history'
+          ? await collectTokenHistoryJsonAsync({ origin: api.origin, force: request.force === true })
+          : await collectJsonAsync(api.origin, request.id, { force: request.force === true });
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ ok: true, data }));
+        res.end(`{"ok":true,"data":${out.json}}`);
       }
       catch (e) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: false, error: e.message })); }
     });
   });
   server.listen(0, '127.0.0.1', () => {
-    const info = { port: server.address().port, token: secret, pid: process.pid, origin: api.origin, watchdog: true, startedAt: Date.now() };
+    const bridgeVersion = require('./package.json').version || '3.1.0';
+    const info = { port: server.address().port, token: secret, pid: process.pid, origin: api.origin, watchdog: true, bridgeVersion, startedAt: Date.now() };
     fs.writeFileSync(stamp, JSON.stringify(info));
     console.log('Context Meter v2 local read-only bridge ready on loopback port ' + info.port);
   });

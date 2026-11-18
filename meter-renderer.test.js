@@ -1497,7 +1497,7 @@ test('v3.0.0 Hot-Reload & ARIA Regressions (#12): legacy v2.9 IPC unattributed m
 test('v3.0.1: dismisses v2.32.1 titlebar-more-actions menu on panel open without closing newly opened meter panel', () => {
   const h = harness();
   const api = h.sandbox.__AGContextMeter;
-  assert.equal(api.version, '3.0.1');
+  assert.equal(api.version, require('./package.json').version);
   h.finishScan();
 
   let escapeDispatched = 0;
@@ -1531,6 +1531,89 @@ test('v3.0.1: dismisses v2.32.1 titlebar-more-actions menu on panel open without
   h.elements.get('badge').click();
   assert.equal(escapeDispatched, 1, 'Opening Context panel must dismiss expanded v2.32.1 titlebar-more-actions menu');
   assert.equal(h.elements.get('panel').hidden, false, 'Context panel must remain open after dismissing native menu');
+
+  api.dispose();
+});
+
+test('v3.1.0: IPC getTokenHistory and scan accept pre-serialized JSON string payloads without main-thread structured clone', async () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  h.sandbox.window.contextMeterAPI = {
+    getTokenHistory: async () => ({
+      ok: true,
+      json: JSON.stringify({
+        pricingSchemaVersion: 3,
+        firstTokenDate: todayStr,
+        summary: { grandTotalTokens: 12500000, rootSessionCount: 3, subagentSessionCount: 1 },
+        sessionRollups: {
+          'aaaa1111-1111-1111-1111-111111111111': {
+            rootId: 'aaaa1111-1111-1111-1111-111111111111',
+            title: 'Worker JSON IPC',
+            childCount: 1,
+            totalTokens: 12500000,
+            totalCostUSD: 3.25,
+            totalRetailCostUSD: 6.50
+          }
+        },
+        topSessions: [],
+        dailyMap: {
+          [todayStr]: {
+            total: 12500000,
+            input: 1500000,
+            output: 500000,
+            cache: 10500000,
+            steps: 12,
+            models: {
+              'gemini-4-carbon': { input: 1500000, cache: 10500000, output: 500000, total: 12500000, steps: 12 }
+            }
+          }
+        }
+      }),
+      stats: { mode: 'worker', sweep: 'fast' }
+    }),
+    scan: async () => ({
+      ok: true,
+      json: JSON.stringify({
+        version: '3.1.0',
+        conversation: '64f0cef6-1c40-49db-81ca-d33d09f04e94',
+        scannedAt: Date.now() + 5000,
+        latest: {
+          used: 180000,
+          actual: 180000,
+          estimate: 175000,
+          budget: 512000,
+          percent: (180000 / 512000) * 100,
+          estimated: false,
+          input: 176000,
+          cached: 150000,
+          output: 4000,
+          model: 'Gemini 4 Carbon (High)',
+          rawModel: 'MODEL_PLACEHOLDER_M427',
+          status: 'reported'
+        },
+        session: {
+          steps: 10,
+          userMessages: 4,
+          assistantMessages: 4,
+          compactionCount: 0,
+          lastCompactionFreedTokens: 0,
+          total: { chars: 20000, low: 5000, high: 8000 },
+          attachmentTotal: { chars: 0, low: 0, high: 0 },
+          groups: {},
+          attachments: [],
+          unknownFiles: 0,
+          complete: true
+        }
+      })
+    })
+  };
+
+  await api.syncTokenHistoryForTest(true);
+  assert.equal(h.elements.get('t-total-val').textContent, '12.5M');
+  assert.match(h.elements.get('cost-model-legend').textContent, /Carbon/);
 
   api.dispose();
 });
