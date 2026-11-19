@@ -18,7 +18,7 @@ const { loadAsarEngine, getStateDir } = require('./asar-engine');
 const { install, findAsarPath, tryHotInject } = require('./install');
 const { restore } = require('./restore');
 const { resolvePython } = require('./meter-collector');
-const { isRemotePageTarget, probeLocalAppOrigin } = require('./local-api');
+const { isRemotePageTarget, probeLocalAppOrigin, connect: connectLocalApi } = require('./local-api');
 
 const asar = loadAsarEngine();
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -33,9 +33,44 @@ function getDevToolsPort() {
   return Number.isFinite(port) && port > 0 ? port : null;
 }
 
+function readRuntimeStampForOrigin(origin) {
+  try {
+    const stampPath = path.join(getStateDir(), 'runtime-status.json');
+    if (!fs.existsSync(stampPath)) return null;
+    const rt = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
+    if (!rt || !rt.pid || rt.origin !== origin) return null;
+    process.kill(rt.pid, 0);
+    return rt;
+  } catch {
+    return null;
+  }
+}
+
 async function queryLiveWindow() {
   const port = getDevToolsPort();
-  if (!port) return { running: false };
+  if (!port) {
+    // Antigravity v2.33.0+ disables --remote-debugging-port=0 by default.
+    // Fall back to main.log origin probe + Electron IPC runtime-status.json stamp.
+    try {
+      const api = await connectLocalApi();
+      const rt = readRuntimeStampForOrigin(api.origin);
+      return {
+        running: true,
+        cdpPort: null,
+        cdpEnabled: false,
+        pageFound: true,
+        origin: api.origin,
+        active: Boolean(rt),
+        version: rt?.meterVersion || null,
+        hasIpcBridge: Boolean(rt),
+        note: rt
+          ? 'IPC 原生运行中（v2.33.0+ 默认关闭 CDP 端口）'
+          : '客户端运行中（v2.33.0+ 默认关闭 CDP 热注入，ASAR 写入后重启一次即原生生效）'
+      };
+    } catch {
+      return { running: false };
+    }
+  }
   try {
     const pages = await new Promise((resolve, reject) => {
       const req = http.get(`http://127.0.0.1:${port}/json/list`, res => {
@@ -100,9 +135,9 @@ async function queryLiveWindow() {
 
 async function ensureLiveBridgeIfNeeded(options = {}) {
   const live = await queryLiveWindow();
-  if (!live.running || !live.pageFound) return;
+  if (!live.running || !live.pageFound || !live.cdpPort) return;
   if (live.hasIpcBridge && !options.allowAlongsideLegacyIpc) return;
-  const expectedBridgeVersion = require('./package.json').version || '3.1.0';
+  const expectedBridgeVersion = require('./package.json').version || '3.1.1';
   const stateDir = getStateDir();
   const stateLivePath = path.join(stateDir, '.live-session.json');
   const liveSessionPath = fs.existsSync(stateLivePath)
@@ -205,7 +240,7 @@ async function cmdCheck(customPath) {
   const py = resolvePython();
   console.log(`  - Python 附件深度解析器: ${py || '未检测到（基础上下文统计不受影响）'}`);
   const live = await queryLiveWindow();
-  console.log(`  - 运行中窗口 CDP 状态: ${live.running ? `已连接 (端口 ${live.cdpPort})` : '客户端未运行或未开启调试端口'}`);
+  console.log(`  - 运行中窗口状态: ${live.running ? (live.cdpPort ? `已连接 CDP (端口 ${live.cdpPort})` : `已连接本地服务 (${live.origin}，v2.33.0+ 默认关闭 CDP)`) : '客户端未运行'}`);
   console.log('✅ 环境预检通过！');
 }
 
@@ -221,11 +256,26 @@ async function main() {
     const manifest = await install({ path: customPath });
     await tryHotInject();
     console.log(`✅ ASAR 持久化注入完成: ${manifest.installed} (Antigravity v${manifest.version}, 校验 ${manifest.originalFilesVerified} 个原文件)`);
-    console.log(`✅ 运行中窗口热挂载状态: ${manifest.liveInjected ? '已即时生效（无需重启）' : '将在下次启动 Antigravity 时自动生效'}`);
+    if (manifest.liveInjected) {
+      console.log('✅ 运行中窗口热挂载状态: 已即时生效（无需重启）');
+    } else {
+      const liveAfter = await queryLiveWindow();
+      if (liveAfter.running && !liveAfter.cdpPort) {
+        console.log('ℹ️ 运行中窗口状态: 检测到 Antigravity v2.33.0+ 默认关闭了 CDP 调试端口，持久化补丁已写入，重启一次客户端即可自动生效！');
+      } else {
+        console.log('✅ 运行中窗口热挂载状态: 将在下次启动 Antigravity 时自动生效');
+      }
+    }
   } else if (cmd === 'live') {
     await ensureLiveBridgeIfNeeded({ allowAlongsideLegacyIpc: true });
     const ok = await tryHotInject();
-    if (!ok) throw new Error('未检测到运行中的 Antigravity 主窗口，请先打开 Antigravity 或使用 node cli.js install。');
+    if (!ok) {
+      const liveNow = await queryLiveWindow();
+      if (liveNow.running && !liveNow.cdpPort) {
+        throw new Error('Antigravity v2.33.0+ 默认关闭了 --remote-debugging-port，请直接使用 node cli.js install 写入并重启一次客户端（或以 --remote-debugging-port=0 启动客户端）。');
+      }
+      throw new Error('未检测到运行中的 Antigravity 主窗口，请先打开 Antigravity 或使用 node cli.js install。');
+    }
     console.log('✅ 已通过 CDP 热注入当前运行的 Antigravity 窗口！');
   } else if (cmd === 'restore' || cmd === 'uninstall') {
     const res = await restore();

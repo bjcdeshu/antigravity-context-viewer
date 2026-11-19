@@ -1,3 +1,17 @@
+# Release Notes — v3.1.1
+
+## Antigravity Context & Token Viewer v3.1.1
+
+### Highlights
+1. **Antigravity `v2.33.0` 全新模型 `Gemini 4 Neon` 与 `Orchestrator (Neon)` 适配**
+   - 新增 `Gemini 4 Neon`（`MODEL_PLACEHOLDER_M532..M535`，`$3.00 / $0.15 / $15.00` 每百万 Token）与 `Orchestrator (Neon)`（`MODEL_PLACEHOLDER_M537`）映射、模型池配额名及官方 `$ USD` 计价目录。
+
+2. **Antigravity `v2.33.0` 默认关闭 CDP 端口（`DevToolsActivePort`）与新增辅助窗口适配**
+   - 遵循 `v2.33.0` 默认关闭 `--remote-debugging-port=0` 的安全加固（不强改开启本地 CDP 端口）：在 `local-api.js` 与 `cli.js` 新增基于官方 `main.log`（`Local: https://127.0.0.1:<port>/`）+ 实时探活回退以及 Electron 主进程 `runtime-status.json` 运行态心跳标记，确保无 CDP 下 `cli.js status` / `check` 依然准确识别运行态与注入版本。
+   - 适配 `v2.33.0` 新增的 Computer Use 辅助浮窗（`dist/hubWindows.js` `isAuxWindow`、`AGY Desktop HUD`）与弹窗过滤，以及多会话窄分屏顶栏 `data-reveal-on-hover` 常驻可见与 `aria-hidden` 渐变遮罩宽度排除。
+
+---
+
 # Release Notes — v3.1.0
 
 ## Antigravity Context & Token Viewer v3.1.0

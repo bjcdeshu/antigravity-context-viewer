@@ -34,6 +34,11 @@
     MODEL_PLACEHOLDER_M528: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (XHigh)' },
     MODEL_PLACEHOLDER_M526: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Medium)' },
     MODEL_PLACEHOLDER_M527: { family: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Low)' },
+    MODEL_PLACEHOLDER_M532: { family: 'gemini-4-neon', label: 'Gemini 4 Neon (High)' },
+    MODEL_PLACEHOLDER_M533: { family: 'gemini-4-neon', label: 'Gemini 4 Neon (Medium)' },
+    MODEL_PLACEHOLDER_M534: { family: 'gemini-4-neon', label: 'Gemini 4 Neon (Low)' },
+    MODEL_PLACEHOLDER_M535: { family: 'gemini-4-neon', label: 'Gemini 4 Neon (XHigh)' },
+    MODEL_PLACEHOLDER_M537: { family: 'gemini-pro-orchestrator-neon', label: 'Orchestrator (Neon)' },
     MODEL_PLACEHOLDER_M667: { family: 'gemini-pro-orchestrator', label: 'Orchestrator (Carbon)' },
     MODEL_PLACEHOLDER_M681: { family: 'gemini-pro-orchestrator-argon', label: 'Orchestrator (Argon)' }
   };
@@ -54,6 +59,12 @@
       promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
       standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
     },
+    'gemini-4-neon': {
+      label: 'Gemini 4 Neon',
+      shortLabel: 'Neon',
+      color: '#2dd4bf',
+      standard: { input: 3.00, cacheRead: 0.15, output: 15.00 }
+    },
     'gemini-4-hydrogen': {
       label: 'Gemini 4 Hydrogen',
       shortLabel: 'Hydrogen',
@@ -73,6 +84,12 @@
       color: '#c87d55',
       promo: { effectiveTo: '2026-11-30', input: 2.00, cacheRead: 0.10, output: 10.00 },
       standard: { input: 4.00, cacheRead: 0.20, output: 20.00 }
+    },
+    'gemini-pro-orchestrator-neon': {
+      label: 'Orchestrator (Neon)',
+      shortLabel: 'Orch-Neon',
+      color: '#14b8a6',
+      standard: { input: 3.00, cacheRead: 0.15, output: 15.00 }
     },
     'gemini-3.8-flash': {
       label: 'Gemini 3.8 Flash',
@@ -178,12 +195,16 @@
     const upper = trimmed.toUpperCase();
     const ph = PLACEHOLDER_MODEL_MAP[upper];
 
+    if (s.includes('orchestrator-neon') || s.includes('orchestrator (neon)') || s.includes('orch-neon') || s.includes('orch (neon)') || upper === 'MODEL_PLACEHOLDER_M537') {
+      return 'gemini-pro-orchestrator-neon';
+    }
     if (s.includes('orchestrator-argon') || s.includes('orchestrator (argon)') || s.includes('orch-argon') || s.includes('orch (argon)') || upper === 'MODEL_PLACEHOLDER_M681') {
       return 'gemini-pro-orchestrator-argon';
     }
     if (s.includes('orchestrator') || s.includes('orch-carbon') || s.includes('orch (carbon)') || upper === 'MODEL_PLACEHOLDER_M667') {
       return 'gemini-pro-orchestrator';
     }
+    if (s.includes('neon') || s.includes('gemini-4-neon')) return 'gemini-4-neon';
     if (s.includes('hydrogen') || s.includes('gemini-4-hydrogen')) return 'gemini-4-hydrogen';
     if (s.includes('carbon') || s.includes('gemini-4-carbon')) return 'gemini-4-carbon';
     if (s.includes('argon') || s.includes('gemini-4-argon')) return 'gemini-4-argon';
@@ -256,9 +277,11 @@
     const poolNames = {
       'gemini-4-carbon': 'Gemini 4 Carbon 配额',
       'gemini-4-argon': 'Gemini 4 Argon 配额',
+      'gemini-4-neon': 'Gemini 4 Neon 配额',
       'gemini-4-hydrogen': 'Gemini 4 Hydrogen 配额',
       'gemini-pro-orchestrator': 'Orchestrator (Carbon) 配额',
       'gemini-pro-orchestrator-argon': 'Orchestrator (Argon) 配额',
+      'gemini-pro-orchestrator-neon': 'Orchestrator (Neon) 配额',
       'gemini-3.8-flash': 'Gemini 3.8 Flash 配额',
       'claude-opus-5-5': 'Claude Opus 5.5 配额',
       'claude-sonnet-5-5': 'Claude Sonnet 5.5 配额',

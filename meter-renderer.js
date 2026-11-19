@@ -2180,6 +2180,12 @@
           '[data-aux-pane-focus-scope="true"] > div[data-active-tab-id] {',
           '  padding-right: calc(var(--right-cluster-width, 140px) - 4px) !important;',
           '}',
+          '[data-testid="pane-titlebar-toolbar"][data-reveal-on-hover]:has(#ag-context-meter) {',
+          '  opacity: 1 !important;',
+          '  pointer-events: auto !important;',
+          '  position: static !important;',
+          '  background: transparent !important;',
+          '}',
           wcoWidth > 0 ? [
             `.agy-layout-vars, [data-testid="pane-titlebar-toolbar"] { --right-cluster-width: ${44 + wcoWidth}px !important; }`,
             '[class*="@container/titlebar"],',
@@ -2382,7 +2388,11 @@
               let sum = 0;
               let btnCount = 0;
               for (const child of rightGroup.children) {
-                if (child !== host && child.getBoundingClientRect) {
+                if (
+                  child !== host &&
+                  child.getAttribute?.('aria-hidden') !== 'true' &&
+                  child.getBoundingClientRect
+                ) {
                   const w = child.getBoundingClientRect().width;
                   if (w > 0) {
                     sum += w;
@@ -5200,7 +5210,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '3.1.0',
+    version: '3.1.1',
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();

@@ -38,11 +38,14 @@ ensureProxyEnvironment(process.env);
 exports.ensureProxyEnvironment = ensureProxyEnvironment;
 
 let cachedMeterSource = '';
+let cachedMeterVersion = '3.1.1';
 function getMeterSource() {
   if (cachedMeterSource) return cachedMeterSource;
   try {
     const coreCode = fs.readFileSync(path.join(__dirname, 'meter-core.js'), 'utf8');
     const rendererCode = fs.readFileSync(path.join(__dirname, 'meter-renderer.js'), 'utf8');
+    const vm = rendererCode.match(/version:\s*['"]([^'"]+)['"]/);
+    if (vm && vm[1]) cachedMeterVersion = vm[1];
     cachedMeterSource = `${coreCode}\n${rendererCode}\ntrue;`;
     return cachedMeterSource;
   } catch (e) {
@@ -50,6 +53,35 @@ function getMeterSource() {
   }
 }
 getMeterSource();
+
+let lastRuntimeStampKey = '';
+function recordRuntimeHeartbeat(origin) {
+  try {
+    if (!origin) return;
+    const os = require('os');
+    const stateDir = process.env.AG_METER_STATE_DIR || (
+      process.platform === 'win32'
+        ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'AntigravityContextMeter')
+        : process.platform === 'darwin'
+          ? path.join(os.homedir(), 'Library', 'Application Support', 'AntigravityContextMeter')
+          : path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'AntigravityContextMeter')
+    );
+    const key = `${process.pid}:${origin}:${cachedMeterVersion}`;
+    if (key === lastRuntimeStampKey) return;
+    lastRuntimeStampKey = key;
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stampPath = path.join(stateDir, 'runtime-status.json');
+    const tmpPath = `${stampPath}.tmp-${process.pid}`;
+    fs.writeFileSync(tmpPath, JSON.stringify({
+      meterVersion: cachedMeterVersion,
+      appVersion: typeof app?.getVersion === 'function' ? app.getVersion() : null,
+      pid: process.pid,
+      origin,
+      updatedAt: new Date().toISOString()
+    }));
+    fs.renameSync(tmpPath, stampPath);
+  } catch {}
+}
 
 function isAuxiliaryInternalUrl(rawUrl) {
   const s = String(rawUrl || '');
@@ -75,6 +107,13 @@ function isLocalWebContentsTarget(wc, opts = {}) {
 
 function isLocalWindowTarget(win, opts = {}) {
   if (!win || win.isDestroyed?.()) return false;
+  if (win.__isWebviewPopupWindow) return false;
+  try {
+    const hw = opts.hubWindows ?? require('./hubWindows');
+    if (hw && typeof hw.isAuxWindow === 'function' && hw.isAuxWindow(win)) {
+      return false;
+    }
+  } catch {}
   try {
     const wb = opts.windowBackends ?? require('./remote/windowBackends');
     if (wb && typeof wb.isLocalAppWindow === 'function' && !wb.isLocalAppWindow(win)) {
@@ -189,6 +228,7 @@ function registerIpcOnce() {
   ipcMain.handle('context-meter:scan', async (event, id, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
+    recordRuntimeHeartbeat(url.origin);
     try {
       const out = await collectJsonAsync(url.origin, id, { force: force === true });
       return { ok: true, json: out.json, stats: out.stats };
@@ -200,6 +240,7 @@ function registerIpcOnce() {
   ipcMain.handle('context-meter:token-history', async (event, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
+    recordRuntimeHeartbeat(url.origin);
     try {
       const out = await collectTokenHistoryJsonAsync({ origin: url.origin, force: force === true });
       return { ok: true, json: out.json, stats: out.stats };
@@ -284,6 +325,7 @@ async function ensureMeterInjected(win, options = {}) {
       const runtimeSource = getMeterSource();
       if (!runtimeSource) return false;
       await wc.executeJavaScript(runtimeSource);
+      try { recordRuntimeHeartbeat(new URL(url).origin); } catch {}
       return true;
     })();
 

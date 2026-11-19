@@ -1184,6 +1184,59 @@ test('v3.1.0: eval-bootstrapped Worker, zero-byte cold restart, worker/fallback/
   }
 });
 
+test('v3.1.1: Antigravity v2.33.0 Gemini 4 Neon & Orchestrator (Neon) pricing, hubWindows DesktopHud exclusion, and main.log CDP-less discovery', () => {
+  const {
+    normalizeModelFamily,
+    calculateTurnCost,
+    resolveModelQuota
+  } = require('./meter-core');
+  const { isLocalWindowTarget } = require('./meter-main');
+  const { extractLocalOriginsFromLogText } = require('./local-api');
+
+  // 1) Gemini 4 Neon (M532..M535) & Orchestrator (Neon) (M537) pricing ($3.00 / $0.15 / $15.00 per 1M)
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M532'), 'gemini-4-neon');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M535'), 'gemini-4-neon');
+  assert.equal(normalizeModelFamily('Gemini 4 Neon (XHigh)'), 'gemini-4-neon');
+  assert.equal(normalizeModelFamily('MODEL_PLACEHOLDER_M537'), 'gemini-pro-orchestrator-neon');
+  assert.equal(normalizeModelFamily('Orchestrator (Neon)'), 'gemini-pro-orchestrator-neon');
+
+  const neonCost = calculateTurnCost({
+    rawModel: 'MODEL_PLACEHOLDER_M532',
+    input: 1_000_000,
+    cache: 1_000_000,
+    output: 100_000,
+    dateKey: '2026-11-19'
+  }, { pricingMode: 'actual' });
+  assert.equal(neonCost.modelKey, 'gemini-4-neon');
+  assert.equal(neonCost.shortLabel, 'Neon');
+  assert.equal(Number(neonCost.costUSD.toFixed(4)), Number((3.00 + 0.15 + 1.50).toFixed(4)));
+
+  const orchNeonQuota = resolveModelQuota('MODEL_PLACEHOLDER_M537', [
+    { label: 'Orchestrator (Neon)', modelOrAlias: { model: 'MODEL_PLACEHOLDER_M537' }, quotaInfo: { remainingFraction: 0.85 } }
+  ]);
+  assert.equal(orchNeonQuota?.poolName, 'Orchestrator (Neon) 配额');
+  assert.equal(orchNeonQuota?.remainingFraction, 0.85);
+
+  // 2) v2.33.0 hubWindows.isAuxWindow (AGY Desktop HUD) & popup window exclusion
+  const hudWin = { isDestroyed: () => false, title: 'AGY Desktop HUD' };
+  const popupWin = { isDestroyed: () => false, __isWebviewPopupWindow: true };
+  assert.equal(isLocalWindowTarget(hudWin, { hubWindows: { isAuxWindow: w => w === hudWin } }), false);
+  assert.equal(isLocalWindowTarget(popupWin), false);
+
+  // 3) v2.33.0 main.log origin extraction (newest first, deduplicated)
+  const sampleLog = [
+    '[2026-11-18 07:40:00]   Local:       https://127.0.0.1:7575/',
+    '[2026-11-19 08:05:12]   Local:       https://127.0.0.1:2541/',
+    '[2026-11-19 08:06:00]   Local:       https://127.0.0.1:7575/',
+    '[2026-11-19 08:06:30]   Local:       https://127.0.0.1:2541/'
+  ].join('\n');
+  assert.deepEqual(extractLocalOriginsFromLogText(sampleLog), [
+    'https://127.0.0.1:2541',
+    'https://127.0.0.1:7575'
+  ]);
+});
+
+
 
 
 
