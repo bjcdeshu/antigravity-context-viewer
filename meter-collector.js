@@ -179,7 +179,18 @@ function setBoundedMap(map, key, value, maxEntries) {
   }
 }
 
-function request(origin, method, body, token) {
+const ALLOWED_LS_METHODS = new Set([
+  'GetCascadeTrajectory',
+  'GetCascadeTrajectorySteps',
+  'GetCascadeTrajectoryGeneratorMetadata',
+  'GetAllCascadeTrajectories',
+  'GetUserStatus'
+]);
+
+function request(origin, method, body, token, rawJsonText = false) {
+  if (method && !ALLOWED_LS_METHODS.has(method)) {
+    return Promise.reject(new Error(`Disallowed Language Server method: ${method}`));
+  }
   const url = method ? `${origin}/exa.language_server_pb.LanguageServerService/${method}` : origin + '/';
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -202,10 +213,13 @@ function request(origin, method, body, token) {
         });
         response.on('end', () => {
           const text = Buffer.concat(chunks).toString();
-          if (response.statusCode !== 200) reject(new Error(`本机接口 HTTP ${response.statusCode}`));
-          else {
+          if (response.statusCode !== 200) {
+            const err = new Error(`本机接口 HTTP ${response.statusCode}`);
+            if (response.statusCode === 401 || response.statusCode === 403) err.code = 'AUTH';
+            reject(err);
+          } else {
             try {
-              resolve(method ? JSON.parse(text) : text);
+              resolve(method && !rawJsonText ? JSON.parse(text) : text);
             } catch (e) {
               reject(e);
             }
@@ -399,17 +413,28 @@ async function scanFiles(media) {
 
 const hostMetaByOrigin = new Map();
 
-async function fetchHostUserMeta(origin, force = false) {
+async function fetchHostUserMeta(origin, force = false, csrfHint = '') {
   if (!origin || !/^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) return null;
+  const cleanHint = typeof csrfHint === 'string' ? csrfHint.trim() : '';
   const cached = hostMetaByOrigin.get(origin);
-  if (!force && cached && cached.csrfToken && Date.now() - cached.at < 60000) {
+  if (
+    !force &&
+    cached &&
+    cached.csrfToken &&
+    (!cleanHint || cached.csrfToken === cleanHint) &&
+    Date.now() - cached.at < 60000
+  ) {
     return cached;
   }
   try {
-    const html = await request(origin);
-    const match = html.match(/window\.__APP_CONFIG__\s*=\s*(.*?);/);
-    if (!match) return null;
-    const token = JSON.parse(match[1]).csrfToken;
+    let token = cleanHint;
+    if (!token) {
+      const html = await request(origin);
+      const match = html.match(/window\.__APP_CONFIG__\s*=\s*(.*?);/);
+      if (!match) return null;
+      token = JSON.parse(match[1]).csrfToken;
+    }
+    if (!token) return null;
     let userTier = cached?.userTier || null;
     let cascadeModelConfigs = cached?.cascadeModelConfigs || [];
     try {
@@ -428,13 +453,45 @@ async function fetchHostUserMeta(origin, force = false) {
           quotaInfo: c.quotaInfo || null
         }));
       }
-    } catch {}
+    } catch (statusErr) {
+      if (statusErr && statusErr.code === 'AUTH' && cleanHint) {
+        hostMetaByOrigin.delete(origin);
+        throw statusErr;
+      }
+    }
     const entry = { origin, at: Date.now(), csrfToken: token, userTier, cascadeModelConfigs };
     setBoundedMap(hostMetaByOrigin, origin, entry, 8);
     return entry;
-  } catch {
+  } catch (err) {
+    if (err && err.code === 'AUTH' && cleanHint) throw err;
     return null;
   }
+}
+
+async function pollGeneratorMetadataJsonAsync(origin, id, offset = 0, options = {}) {
+  if (!/^https:\/\/127\.0\.0\.1:\d+$/.test(origin) || !/^[a-f\d-]{36}$/i.test(id)) {
+    throw new Error('无效本机会话');
+  }
+  const csrfHint = typeof options.csrfToken === 'string' ? options.csrfToken.trim() : '';
+  let token = csrfHint;
+  if (!token) {
+    const meta = await fetchHostUserMeta(origin, false, '');
+    token = meta?.csrfToken || '';
+  }
+  if (!token) {
+    const authErr = new Error('未取得本机鉴权配置');
+    authErr.code = 'AUTH';
+    throw authErr;
+  }
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const json = await request(
+    origin,
+    'GetCascadeTrajectoryGeneratorMetadata',
+    { cascadeId: id, generatorMetadataOffset: safeOffset, includeMessages: false },
+    token,
+    true
+  );
+  return { json };
 }
 
 async function collectDirect(origin, id, options = {}) {
@@ -449,13 +506,18 @@ async function collectDirect(origin, id, options = {}) {
     if (previous?.pending && options.force) {
       try { await previous.pending; } catch {}
     }
-    const hostMeta = await fetchHostUserMeta(origin, options.force === true);
-    let token = hostMeta?.csrfToken || '';
+    const csrfHint = typeof options.csrfToken === 'string' ? options.csrfToken.trim() : '';
+    const hostMeta = await fetchHostUserMeta(origin, options.force === true, csrfHint);
+    let token = csrfHint || hostMeta?.csrfToken || '';
     const modelConfigs = hostMeta?.cascadeModelConfigs || [];
     if (!token) {
       const html = await request(origin);
       const match = html.match(/window\.__APP_CONFIG__\s*=\s*(.*?);/);
-      if (!match) throw new Error('未取得本机鉴权配置');
+      if (!match) {
+        const authErr = new Error('未取得本机鉴权配置');
+        authErr.code = 'AUTH';
+        throw authErr;
+      }
       token = JSON.parse(match[1]).csrfToken;
     }
     const call = (method, body) => request(origin, method, body, token);
@@ -3085,7 +3147,8 @@ async function runTokenHistoryJobInThread(options = {}, useSyncFs = false) {
   let liveRescanCompleted = false;
 
   if (origin && /^https:\/\/127\.0\.0\.1:\d+$/.test(origin)) {
-    const hostMeta = await fetchHostUserMeta(origin, options.force === true);
+    const csrfHint = typeof options.csrfToken === 'string' ? options.csrfToken.trim() : '';
+    const hostMeta = await fetchHostUserMeta(origin, options.force === true, csrfHint);
     if (hostMeta && hostMeta.csrfToken) {
       const trajIndexPromise = fetchTrajectoryIndex(origin, hostMeta.csrfToken, options.force === true);
 
@@ -3237,7 +3300,7 @@ if (IS_COLLECTOR_WORKER && parentPort) {
           const res = await runTokenHistoryJobInThread(msg.options || {}, true);
           parentPort.postMessage({ t: 'done', id: msg.id, ok: true, json: res.json, hasModels: res.hasModels, stats: res.stats });
         } catch (err) {
-          parentPort.postMessage({ t: 'done', id: msg.id, ok: false, error: err?.message || String(err) });
+          parentPort.postMessage({ t: 'done', id: msg.id, ok: false, error: err?.message || String(err), code: err?.code || null });
         }
       });
     } else if (msg.op === 'scan') {
@@ -3247,7 +3310,7 @@ if (IS_COLLECTOR_WORKER && parentPort) {
           const res = await collectDirect(msg.origin, msg.cascadeId, msg.options || {});
           parentPort.postMessage({ t: 'done', id: msg.id, ok: true, json: JSON.stringify(res), stats: { mode: 'worker' } });
         } catch (err) {
-          parentPort.postMessage({ t: 'done', id: msg.id, ok: false, error: err?.message || String(err) });
+          parentPort.postMessage({ t: 'done', id: msg.id, ok: false, error: err?.message || String(err), code: err?.code || null });
         }
       })();
     } else {
@@ -3519,6 +3582,7 @@ async function collectTokenHistoryJsonAsync(options = {}) {
           options: {
             homeDir: options.homeDir || undefined,
             origin,
+            csrfToken: typeof options.csrfToken === 'string' ? options.csrfToken : undefined,
             force: Boolean(options.force),
             forceModelRescan: Boolean(options.forceModelRescan),
             rebuildIndex: Boolean(options.rebuildIndex),
@@ -3526,7 +3590,11 @@ async function collectTokenHistoryJsonAsync(options = {}) {
             disableTail: Boolean(options.disableTail)
           }
         });
-        if (!msg.ok) throw new Error(msg.error || 'Worker tokenHistory failed');
+        if (!msg.ok) {
+          const wErr = new Error(msg.error || 'Worker tokenHistory failed');
+          if (msg.code) wErr.code = msg.code;
+          throw wErr;
+        }
         lastScanStats = msg.stats || null;
         cachedTokenHistoryEntry = {
           home,
@@ -3582,9 +3650,16 @@ async function collectJsonAsync(origin, id, options = {}) {
         op: 'scan',
         origin,
         cascadeId: id,
-        options: { force: Boolean(options.force) }
+        options: {
+          force: Boolean(options.force),
+          csrfToken: typeof options.csrfToken === 'string' ? options.csrfToken : undefined
+        }
       });
-      if (!msg.ok) throw new Error(msg.error || '扫描未返回有效结果');
+      if (!msg.ok) {
+        const wErr = new Error(msg.error || '扫描未返回有效结果');
+        if (msg.code) wErr.code = msg.code;
+        throw wErr;
+      }
       return { json: msg.json, stats: msg.stats };
     } catch (err) {
       if (collectorWorkerFailures === 0) throw err;
@@ -3607,6 +3682,8 @@ const __test = {
     indexStateByAgDir.clear();
     lastArchiveSigHashByPath.clear();
     archiveCorruptStreaks.clear();
+    hostMetaByOrigin.clear();
+    trajectoryIndexByOrigin.clear();
     cachedAttrDiskEntry = null;
     cachedTokenHistoryEntry = null;
     activeHistoryJobPromise = null;
@@ -3635,6 +3712,8 @@ module.exports = {
   collectTokenHistory,
   collectTokenHistoryAsync,
   collectTokenHistoryJsonAsync,
+  pollGeneratorMetadataJsonAsync,
+  ALLOWED_LS_METHODS,
   parsePlannerStepLine,
   scanFiles,
   pythonScan,

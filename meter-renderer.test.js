@@ -90,8 +90,9 @@ test('badge renders visual progress bar and concise context number when unhovere
   assert.match(h.elements.get('hover-extra').textContent, /\/ 256K/);
   assert.equal(h.elements.get('key-used').textContent, '216.1K (84.4%)');
   assert.equal(h.elements.get('key-limit').textContent, '256K');
-  assert.match(h.elements.get('key-remaining').textContent, /39\.9K \(15\.6%\)/);
-  assert.match(h.elements.get('key-takeaway').textContent, /已使用 84\.4%/);
+  assert.equal(h.elements.get('key-remaining').textContent, '39.9K');
+  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'true');
+  assert.equal(h.elements.get('key-takeaway').textContent, '');
   assert.equal(h.elements.get('key-badge').textContent, '偏高');
   h.sandbox.__AGContextMeter.dispose();
 });
@@ -101,8 +102,9 @@ test('key summary card shows overflow alert and zeroes remaining when exceeded',
   assert.equal(h.elements.get('bar-fill').style.width, '100%');
   assert.equal(h.elements.get('amount').textContent, '服务端超限');
   assert.equal(h.elements.get('key-badge').textContent, '已超限');
-  assert.equal(h.elements.get('key-remaining').textContent, '0 (已溢出)');
+  assert.equal(h.elements.get('key-remaining').textContent, '0');
   assert.match(h.elements.get('key-takeaway').textContent, /已超出服务端最大限制/);
+  assert.doesNotMatch(h.elements.get('key-takeaway').textContent, /新建会话|精简/);
   h.sandbox.__AGContextMeter.dispose();
 });
 test('theme mode switches freely between light and dark', () => {
@@ -142,7 +144,7 @@ test('speed badge and speed summary card accurately render model output speed an
   assert.equal(h.elements.get('speed-ttft').textContent, '8.4s');
   assert.match(h.elements.get('speed-tokens').textContent, /2,388 tok/);
   assert.equal(h.elements.get('speed-badge').textContent, '极速');
-  assert.match(h.elements.get('speed-takeaway').textContent, /112\.1 tok\/s/);
+  assert.equal(h.elements.get('speed-takeaway'), undefined, 'speed-takeaway is permanently hidden and untouched by JS');
   h.sandbox.__AGContextMeter.dispose();
 });
 test('drawer toggle controls secondary technical details visibility', () => {
@@ -224,7 +226,7 @@ test('circular ring indicator and 3-layer tooltip bubble match reference hierarc
 
   assert.equal(ringFill.getAttribute('data-ring-state'), 'determinate');
   // 37k / 475k = 7.789% -> rounds to 8% used (92% remaining)
-  assert.equal(tipTitle.textContent, '上下文窗口：');
+  assert.equal(tipTitle.textContent, '上下文窗口');
   assert.equal(tipPct.textContent, '8% 已用（剩余 92%）');
   assert.equal(tipDetail.textContent, '已用 37k token，共 475k');
 
@@ -260,7 +262,7 @@ test('unknown capacity and estimated states never draw ring as 0% or 100% and pr
   assert.equal(ringFill.getAttribute('data-ring-state'), 'estimated');
   assert.equal(ringFill.getAttribute('stroke-dasharray'), '3.2 4.97');
   assert.match(tipTitle.textContent, /本地估算/);
-  assert.match(tipPct.textContent, /仅估算/);
+  assert.match(tipPct.textContent, /真实占比未知/);
   assert.match(tipDetail.textContent, /≈ 42k token，共 256k/);
 
   h.sandbox.__AGContextMeter.dispose();
@@ -309,15 +311,16 @@ test('6 independent custom color slots support custom values, reset to theme def
   assert.equal(h.host.style.getPropertyValue('--ag-custom-ring-used'), '#10b981');
   assert.equal(h.host.style.getPropertyValue('--ag-custom-speed'), '#f59e0b');
 
-  // High occupancy (>=90%) sets data-occupancy="danger" and explicit text warning in bubble
+  // High occupancy (>=90%) sets data-occupancy="danger" for color cue while keeping bubble copy clean
   h.pending[0].resolve(response({
     usage: { inputTokens: 240000, outputTokens: 2000 },
     chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
   }));
   await h.flush();
   assert.equal(h.host.getAttribute('data-occupancy'), 'danger');
-  assert.match(h.elements.get('ctx-tip-title').textContent, /高占用告警/);
-  assert.match(h.elements.get('ctx-tip-pct').textContent, /接近上限/);
+  assert.equal(h.elements.get('ctx-tip-title').textContent, '上下文窗口');
+  assert.match(h.elements.get('ctx-tip-pct').textContent, /^\d+% 已用（剩余 \d+%）$/);
+  assert.doesNotMatch(`${h.elements.get('ctx-tip-title').textContent} ${h.elements.get('ctx-tip-pct').textContent}`, /告警|接近上限/);
 
   api.resetCustomColors();
   assert.equal(h.host.style.getPropertyValue('--ag-custom-ring-used'), '');
@@ -673,16 +676,16 @@ test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Def
   }));
   await h.flush();
 
-  // Healthy state (50.1% < 75%, speed 100 tok/s >= 15): both takeaways are quiet by default
+  // Healthy state (50.1% < 75%, speed 100 tok/s >= 15): key-takeaway is quiet and speed-takeaway stays permanently hidden
   assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'true');
-  assert.equal(h.elements.get('speed-takeaway').getAttribute('data-quiet'), 'true');
+  assert.equal(h.elements.get('speed-takeaway'), undefined);
   // Cache hit rate: 80000 / 100000 = 80%
   assert.equal(h.elements.get('ctx-cache-hit').textContent, '缓存命中 80%');
   // Context breakdown text & segment widths
   assert.match(h.elements.get('ctx-breakdown-text').textContent, /构成：工具 56% · 系统 22%/);
   assert.equal(h.elements.get('bd-seg-tools').style.width, '55.6%');
 
-  // High occupancy (85% >= 75%) and slow speed (10 tok/s < 15) un-quiets both takeaways without colored ⚡ emoji
+  // High occupancy (85% >= 75%) and slow speed (10 tok/s < 15) signal solely via color/pill without banner prose
   h.sandbox.location.pathname = '/c/33333333-3333-3333-3333-333333333333';
   h.tick();
   h.finishScan(1);
@@ -694,9 +697,11 @@ test('Direction B: Context Breakdown micro-bar, cache hit rate, and Quiet-by-Def
     chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 200000 } }
   }));
   await h.flush();
-  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'false');
-  assert.doesNotMatch(h.elements.get('key-takeaway').textContent, /⚡/);
-  assert.equal(h.elements.get('speed-takeaway').getAttribute('data-quiet'), 'false');
+  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'true');
+  assert.equal(h.elements.get('key-takeaway').textContent, '');
+  assert.equal(h.elements.get('speed-badge').textContent, '偏慢');
+  assert.equal(h.elements.get('speed-badge').className, 'key-pill pill-warn');
+  assert.equal(h.elements.get('speed-takeaway'), undefined);
 
   h.sandbox.__AGContextMeter.dispose();
 });
@@ -839,7 +844,8 @@ test('v2.9.0: API equivalent cost cards, actual vs standard pricing toggle, mode
   assert.equal(api.getPricingMode(), 'standard');
   assert.equal(h.elements.get('pricing-mode-toggle').textContent, '标准零售价');
   assert.equal(h.elements.get('ctx-pricing-mode-btn').textContent, '标准零售价');
-  assert.equal(h.elements.get('h-sum-cost-lbl').textContent, 'API 等值(原价)');
+  assert.match(source, /id="h-sum-cost-lbl">API 等值<\/span>/);
+  assert.equal(h.elements.get('h-sum-cost-lbl'), undefined, 'h-sum-cost-lbl stays static API 等值 without redundant mode suffix');
   const stdTotalNum = parseFloat(h.elements.get('t-total-cost').textContent.replace(/[^0-9.]/g, ''));
   const actTotalNum = parseFloat(actualTotalCostText.replace(/[^0-9.]/g, ''));
   assert.ok(stdTotalNum >= actTotalNum);
@@ -899,6 +905,9 @@ test('v3.0.0 U1-U3: Onyx token bridge, manual theme override guard, unified 3-ca
   assert.match(source, /M4 6\.25L8 10\.25L12 6\.25/);
   assert.doesNotMatch(source, /id="color-drawer"|id="token-color-drawer"/);
   assert.doesNotMatch(source, /id="quota-pool|¥|CNY|>_ CLI|订阅回本|ROI/i);
+  assert.doesNotMatch(source, /高占用告警|建议执行 \/compact|紧张/);
+  assert.doesNotMatch(source, /\.pill-warn\{[^}]*color-mix/);
+  assert.doesNotMatch(source, /\.pill-danger\{[^}]*color-mix/);
 
   // 2) Manual theme override guard sets data-theme-mode="light" / "dark" so host --onyx-* tokens do not leak into manual mode
   assert.equal(h.host.getAttribute('data-theme-mode'), 'auto');
@@ -921,7 +930,7 @@ test('v3.0.0 U1-U3: Onyx token bridge, manual theme override guard, unified 3-ca
   h.elements.get('badge-tokens').trigger('mouseenter');
   assert.equal(h.elements.get('context-tooltip').getAttribute('data-visible'), 'true');
   assert.equal(h.elements.get('context-tooltip').getAttribute('data-anchor'), 'tokens');
-  assert.equal(h.elements.get('ctx-tip-title').textContent, 'Token 用量：');
+  assert.equal(h.elements.get('ctx-tip-title').textContent, 'Token 用量');
   assert.match(h.elements.get('ctx-tip-pct').textContent, /累计 5M · 今日 5M/);
   assert.match(h.elements.get('ctx-tip-detail').textContent, /API 等值 ≈ \$/);
   h.elements.get('badge-tokens').trigger('mouseleave');
@@ -1617,6 +1626,92 @@ test('v3.1.0: IPC getTokenHistory and scan accept pre-serialized JSON string pay
 
   api.dispose();
 });
+
+test('v3.2.0: Antigravity v2.34.0 authBootstrap pollMetadata IPC fallback and quiet 95% warning UX', async () => {
+  const h = harness();
+  const api = h.sandbox.__AGContextMeter;
+  h.finishScan();
+
+  // 1) Simulate Antigravity v2.34.0 authBootstrap: window.__APP_CONFIG__.csrfToken is omitted;
+  //    renderer seamlessly falls back to window.contextMeterAPI.pollMetadata(id, offset)
+  delete h.sandbox.window.__APP_CONFIG__.csrfToken;
+  let ipcPollCalls = 0;
+  h.sandbox.window.contextMeterAPI.pollMetadata = async (id, offset) => {
+    ipcPollCalls += 1;
+    assert.equal(id, '22222222-2222-2222-2222-222222222222');
+    assert.equal(offset, 0);
+    return {
+      ok: true,
+      json: JSON.stringify({
+        generatorMetadata: [{
+          chatModel: {
+            model: 'MODEL_PLACEHOLDER_M532',
+            timeToFirstToken: '1.2s',
+            streamingDuration: '4.0s',
+            usage: {
+              responseId: 'r-v32-95pct',
+              inputTokens: 43200,
+              cacheReadTokens: 200000,
+              outputTokens: 1200
+            },
+            chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+          }
+        }]
+      })
+    };
+  };
+
+  // Switch conversation so tick() triggers a fresh requestPoll without csrfToken
+  h.sandbox.location.pathname = '/c/22222222-2222-2222-2222-222222222222';
+  h.tick();
+  h.finishScan(1);
+  await h.flush();
+  await h.flush();
+
+  assert.equal(ipcPollCalls, 1, 'requestPoll must use contextMeterAPI.pollMetadata when csrfToken is absent');
+  // 244,400 / 256,000 = 95.47% -> high occupancy signals purely via color + concise pill, zero preachy takeaway
+  assert.equal(h.host.getAttribute('data-occupancy'), 'danger');
+  assert.equal(h.elements.get('key-badge').textContent, '接近上限');
+  assert.equal(h.elements.get('key-badge').className, 'key-pill pill-danger');
+  assert.equal(h.elements.get('key-used').textContent, '244.4K (95.5%)');
+  assert.equal(h.elements.get('key-limit').textContent, '256K');
+  assert.equal(h.elements.get('key-remaining').textContent, '11.6K');
+  assert.equal(h.elements.get('key-takeaway').getAttribute('data-quiet'), 'true');
+  assert.equal(h.elements.get('key-takeaway').textContent, '');
+  assert.match(source, /id="speed-takeaway" class="key-takeaway" data-quiet="true" hidden/);
+  assert.equal(h.elements.get('speed-takeaway'), undefined);
+  assert.equal(h.elements.get('ctx-tip-title').textContent, '上下文窗口');
+  assert.equal(h.elements.get('ctx-tip-pct').textContent, '95% 已用（剩余 5%）');
+
+  // 2) Also verify HTTP 403 on stale csrfToken falls back to pollMetadata IPC
+  h.sandbox.window.__APP_CONFIG__.csrfToken = 'stale-csrf';
+  h.sandbox.location.pathname = '/c/44444444-4444-4444-4444-444444444444';
+  h.sandbox.window.contextMeterAPI.pollMetadata = async id => {
+    ipcPollCalls += 1;
+    assert.equal(id, '44444444-4444-4444-4444-444444444444');
+    return {
+      ok: true,
+      data: {
+        generatorMetadata: [{
+          chatModel: {
+            usage: { inputTokens: 32000, outputTokens: 800 },
+            chatStartMetadata: { contextWindowMetadata: { maxContextTokens: 256000 } }
+          }
+        }]
+      }
+    };
+  };
+  h.tick();
+  h.finishScan(2);
+  h.pending[h.pending.length - 1].resolve({ ok: false, status: 403 });
+  await h.flush();
+  await h.flush();
+  assert.equal(ipcPollCalls, 2, 'HTTP 403 on fetch must fall back to contextMeterAPI.pollMetadata');
+  assert.equal(h.elements.get('context-amount').textContent, '32.8K (13%)');
+
+  api.dispose();
+});
+
 
 
 

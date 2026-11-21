@@ -1,3 +1,26 @@
+# Release Notes — v3.2.0
+
+## Antigravity Context & Token Viewer v3.2.0
+
+### Highlights
+1. **外置运行时与单行毫秒级原地 ASAR 钩子（彻底解耦官方版本重构，告别整包解包重打）**
+   - 将全部插件代码迁出 `app.asar`，常驻于 `%LOCALAPPDATA%\AntigravityContextMeter\current\`；`app.asar` 内仅对 `package.json#main`（`dist/main.js`）首行注入单行 `try{require(...)}catch{}` 引导钩子，不再触碰易随小版本重构的 `dist/utils.js`、`dist/preload.js` 或 `dist/nodeWrapper.js`。
+   - 全新 `asar-patch.js` 利用 Electron ASAR Header JSON 节点既有空间实现 **`< 10 ms` 原地补丁（`in-place`）** 与 **100% SHA-256 逐字节还原（`byte-exact-undo`）**，内置 `Antigravity.exe` Electron Fuse V1（`EnableEmbeddedAsarIntegrityValidation`）预检保护，并支持通过 `cli.js reload` 免改 `app.asar` 热重载前端与运行态配置。
+
+2. **客户端热更新退出前一次性自愈守护（`heal.js`）与启动熔断保护（`boot.json`）**
+   - `loader.js` 监听官方 `autoUpdater` 的 `before-quit-for-update` 事件，仅在用户点击「重启更新」的瞬间拉起一次性独立守护进程 `heal.js`（平时零后台常驻进程、零计划任务污染）；待 NSIS 安装器落盘新版本 `app.asar` 后在数十毫秒内自动补回单行引导钩子，客户端自动拉起即直接带着监控条启动，告别「升级后掉插件 → 手动重跑注入 → 二次重启」。
+   - 内置双振出局启动熔断器（`state/boot.json`）与 `AG_METER_DISABLE=1` / `cli.js disable` 紧急开关，确保任何未来极端宿主变动下绝不拖垮 Antigravity 正常启动。
+
+3. **Antigravity `v2.34.0` `authBootstrap` 鉴权加固与 `session.registerPreloadScript` 原生适配**
+   - 遵循 `v2.34.0` 默认启用的 `AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP` 安全边界（不降级宿主环境变量）：通过 `auth-provider.js` 从主进程 `authBootstrap` 内存态同步读取 `getActiveLsCsrfToken()` 并执行严格同源端口校验，透传至 `meter-collector.js` 后台 Worker 与新增的只读 `context-meter:poll-metadata` IPC 通道（配合 `ALLOWED_LS_METHODS` 白名单与 `401/403` 单次刷新重试）。
+   - 采用 Electron 44 原生 `session.defaultSession.registerPreloadScript({ type: 'frame', filePath })` 与 `app.on('web-contents-created')` 统一挂载本机窗口，完整保留 Remote-SSH（`--agy-backend=ssh`）、`DesktopHud`、`agy-browser-stream:` 与 `plugin://` 微应用隔离。
+
+4. **信息层级与高占用预警体验精简（Quiet-by-Default UX 打磨）**
+   - 消除 `75% / 90% / 95%` 高占用状态下的横幅式说教文案（如「建议执行 `/compact` 压缩上下文或新建会话」「高占用告警」）与速度点评横幅，改为纯色阶圆环/进度条与无底色文字胶囊（`偏高` / `接近上限`）平静预警；仅在请求真正超限拒绝或报错时展示一行事实说明。
+   - 精简三胶囊悬停气泡与面板初始占位符（去除标题尾冒号、重复百分比、冗余计价后缀与加载前假 `$0.00` 零值）。
+
+---
+
 # Release Notes — v3.1.1
 
 ## Antigravity Context & Token Viewer v3.1.1

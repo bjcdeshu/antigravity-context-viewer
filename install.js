@@ -1,20 +1,35 @@
 'use strict';
 process.noAsar = true;
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { loadAsarEngine, getStateDir } = require('./asar-engine');
+const { execFileSync } = require('child_process');
+const { getStateDir } = require('./asar-engine');
 const { canRecoverDriftedMeterArchive } = require('./restore');
 const { isRemotePageTarget, probeLocalAppOrigin } = require('./local-api');
+const { inspectAsarStatus, patchAsarEntry } = require('./asar-patch');
 
-const asar = loadAsarEngine();
 const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
+
+const RUNTIME_FILES = [
+  'meter-main.js',
+  'meter-core.js',
+  'meter-renderer.js',
+  'meter-collector.js',
+  'meter-preload.js',
+  'host-adapter.js',
+  'auth-provider.js',
+  'asar-patch.js',
+  'heal.js',
+  'attachment_scan.py'
+];
 
 function findAsarPath(customPath) {
   if (customPath) {
-    let resolved = path.resolve(customPath);
+    const resolved = path.resolve(customPath);
     if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
       const inRes = path.join(resolved, 'resources', 'app.asar');
       if (fs.existsSync(inRes)) return inRes;
@@ -54,8 +69,111 @@ function findAsarPath(customPath) {
   throw new Error('Could not auto-detect Antigravity installation (app.asar). Use --path <path-to-app.asar>.');
 }
 
+function resolveStandaloneNodePath(asarPath) {
+  const hostInstallRoot = asarPath ? path.resolve(path.dirname(path.dirname(asarPath))).toLowerCase() : '';
+  const isInsideHostDir = candidate => {
+    if (!candidate) return true;
+    const norm = path.resolve(candidate).toLowerCase();
+    return Boolean(hostInstallRoot && norm.startsWith(hostInstallRoot));
+  };
+
+  if (!process.env.ELECTRON_RUN_AS_NODE && !process.versions.electron && !isInsideHostDir(process.execPath)) {
+    if (fs.existsSync(process.execPath)) {
+      try {
+        return fs.realpathSync.native ? fs.realpathSync.native(process.execPath) : fs.realpathSync(process.execPath);
+      } catch {
+        return process.execPath;
+      }
+    }
+  }
+
+  const candidates = [];
+  if (process.platform === 'win32') {
+    candidates.push(
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'nodejs', 'node.exe')
+    );
+    try {
+      const whereOut = execFileSync('where.exe', ['node'], { encoding: 'utf8', windowsHide: true, timeout: 2000 });
+      for (const line of whereOut.split(/\r?\n/)) {
+        const p = line.trim();
+        if (p) candidates.unshift(p);
+      }
+    } catch {}
+  } else {
+    candidates.push('/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node');
+  }
+
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) {
+      let real = c;
+      try {
+        real = fs.realpathSync.native ? fs.realpathSync.native(c) : fs.realpathSync(c);
+      } catch {}
+      if (!isInsideHostDir(real)) {
+        return real;
+      }
+    }
+  }
+  return null;
+}
+
+function deployRuntimeFiles(stateDir) {
+  const runtimeDir = path.join(stateDir, 'runtime');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'loader.js'), path.join(stateDir, 'loader.js'));
+  for (const file of RUNTIME_FILES) {
+    const src = path.join(__dirname, file);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(runtimeDir, file));
+    }
+  }
+  return runtimeDir;
+}
+
+function triggerReloadSignal(stateDir) {
+  try {
+    const stateSubDir = path.join(stateDir, 'state');
+    fs.mkdirSync(stateSubDir, { recursive: true });
+    fs.writeFileSync(path.join(stateSubDir, 'reload.signal'), `${Date.now()}:${process.pid}\n`, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRunningRuntimeHookActive(stateDir) {
+  try {
+    const stampPath = path.join(stateDir, 'runtime-status.json');
+    if (!fs.existsSync(stampPath)) return false;
+    const rt = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
+    if (!rt || !rt.pid || !rt.hookVersion) return false;
+    const stampAgeMs = Date.now() - (Date.parse(rt.updatedAt || '') || 0);
+    if (!Number.isFinite(stampAgeMs) || stampAgeMs > 12 * 3600 * 1000) return false;
+    process.kill(rt.pid, 0);
+    if (process.platform === 'win32') {
+      const out = execFileSync('tasklist.exe', ['/FI', `PID eq ${Number(rt.pid)}`, '/NH'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 1500
+      });
+      if (!/Antigravity\.exe/i.test(out)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function tryHotInject(options = {}) {
   try {
+    const stateDir = getStateDir();
+    if (!options.onlyIfMissing && isRunningRuntimeHookActive(stateDir)) {
+      deployRuntimeFiles(stateDir);
+      triggerReloadSignal(stateDir);
+      return true;
+    }
+
     const onlyIfMissing = Boolean(options && options.onlyIfMissing);
     const appData = process.env.APPDATA || (process.platform === 'darwin'
       ? path.join(os.homedir(), 'Library', 'Application Support')
@@ -87,7 +205,6 @@ async function tryHotInject(options = {}) {
     }
     if (!targets.length) return false;
 
-    const stateDir = getStateDir();
     const livePath = fs.existsSync(path.join(stateDir, '.live-session.json'))
       ? path.join(stateDir, '.live-session.json')
       : path.join(__dirname, '.live-session.json');
@@ -172,160 +289,104 @@ async function tryHotInject(options = {}) {
 async function install(options = {}) {
   const customPathIdx = process.argv.indexOf('--path');
   const customPath = options.path || (customPathIdx >= 0 ? process.argv[customPathIdx + 1] : null);
+  const devMode = Boolean(options.dev || process.argv.includes('--dev'));
+  const forceMode = Boolean(options.force || process.argv.includes('--force'));
   const installed = findAsarPath(customPath);
   const stateDir = getStateDir();
-  let sourceArchive = installed;
-  let previousManifest = null;
   const manifestPath = path.join(stateDir, 'installation.json');
   const legacyManifestPath = path.join(__dirname, 'installation.json');
-
   const activeManifestPath = fs.existsSync(manifestPath)
     ? manifestPath
     : (fs.existsSync(legacyManifestPath) ? legacyManifestPath : null);
 
-  if (activeManifestPath) {
-    const previous = JSON.parse(fs.readFileSync(activeManifestPath, 'utf8'));
-    previousManifest = previous;
-    const currentInstalledSha = sha(fs.readFileSync(installed));
-    if (currentInstalledSha === previous.patchedSha256 || canRecoverDriftedMeterArchive(installed, previous.backup)) {
-      if (!fs.existsSync(previous.backup) || sha(fs.readFileSync(previous.backup)) !== previous.originalSha256) {
-        throw new Error('Original backup checksum mismatch');
-      }
-      sourceArchive = previous.backup;
-      if (fs.existsSync(installed + '.unpacked') && !fs.existsSync(sourceArchive + '.unpacked')) {
-        fs.cpSync(installed + '.unpacked', sourceArchive + '.unpacked', { recursive: true, force: false, errorOnExist: true });
-      }
-    }
-  }
-
-  const version = JSON.parse(asar.extractFile(sourceArchive, 'package.json').toString('utf8')).version;
-  let originalUtils = asar.extractFile(sourceArchive, 'dist/utils.js').toString('utf8');
-  const hookLine = '    require("./meter-main").installContextMeter(win);\n';
-  if (originalUtils.includes('installContextMeter(win)')) {
-    originalUtils = originalUtils
-      .replace('try { require("./meter-main").ensureProxyEnvironment(process.env); } catch {}\n', '')
-      .replace('\n    try { require("./meter-main").ensureProxyEnvironment(env); } catch {}', '')
-      .replace(hookLine, '');
-  }
-  const marker = '    void win.loadURL(url);';
-  const setupNodeMarker = 'function setupNodeWrapper(env) {';
-  if (originalUtils.split(marker).length !== 2 || !originalUtils.includes(setupNodeMarker)) {
-    throw new Error('Unexpected createWindow/setupNodeWrapper source in dist/utils.js; nothing changed.');
-  }
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupDir = path.join(stateDir, 'backups');
-  fs.mkdirSync(backupDir, { recursive: true });
-  const backup = path.join(backupDir, `app-${version}-base.asar`);
-
-  if (!fs.existsSync(backup) || sha(fs.readFileSync(backup)) !== sha(fs.readFileSync(sourceArchive))) {
-    fs.copyFileSync(sourceArchive, backup);
-  }
-  if (fs.existsSync(sourceArchive + '.unpacked') && !fs.existsSync(backup + '.unpacked')) {
-    fs.cpSync(sourceArchive + '.unpacked', backup + '.unpacked', { recursive: true, force: false, errorOnExist: true });
-  }
-
-  const staging = path.join(os.tmpdir(), `ag-context-meter-pkg-${stamp}`);
-  const packed = path.join(os.tmpdir(), `ag-context-meter-${stamp}.asar`);
-  try {
-    fs.mkdirSync(staging, { recursive: true });
-    asar.extractAll(sourceArchive, staging);
-    const patchedUtils = originalUtils
-      .replace('"use strict";', '"use strict";\ntry { require("./meter-main").ensureProxyEnvironment(process.env); } catch {}')
-      .replace(setupNodeMarker, setupNodeMarker + '\n    try { require("./meter-main").ensureProxyEnvironment(env); } catch {}')
-      .replace("titleBarStyle: 'hidden',", "titleBarStyle: 'hidden',\n        autoHideMenuBar: true,")
-      .replace(marker, hookLine + marker);
-    fs.writeFileSync(path.join(staging, 'dist', 'utils.js'), patchedUtils);
-
-    const preloadPath = path.join(staging, 'dist', 'preload.js');
-    const preloadMarker = '// Context Meter v2: narrow read-only conversation scan API';
-    let preloadContent = fs.readFileSync(preloadPath, 'utf8');
-    if (preloadContent.includes(preloadMarker)) {
-      const regex = /\r?\n?\/\/ Context Meter v2: narrow read-only conversation scan API\r?\n(?:if \(!process\.argv\.some\([^)]*\)\) \{\r?\n\s*)?electron_1\.contextBridge\.exposeInMainWorld\("contextMeterAPI",\s*\{[\s\S]*?\}\);(?:\r?\n\})?\r?\n?/g;
-      preloadContent = preloadContent.replace(regex, '\n');
-    }
-    preloadContent += `\n${preloadMarker}\nif (!process.argv.some((a) => a === "--agy-backend=ssh")) {\n  electron_1.contextBridge.exposeInMainWorld("contextMeterAPI", { scan: (id, force) => electron_1.ipcRenderer.invoke("context-meter:scan", id, force === true), getTokenHistory: (force) => electron_1.ipcRenderer.invoke("context-meter:token-history", force === true), syncOverlay: (opts) => electron_1.ipcRenderer.invoke("context-meter:sync-overlay", opts) });\n}\n`;
-    fs.writeFileSync(preloadPath, preloadContent);
-
-    const additions = ['meter-main.js', 'meter-core.js', 'meter-renderer.js', 'meter-collector.js', 'attachment_scan.py'];
-    for (const file of additions) {
-      fs.copyFileSync(path.join(__dirname, file), path.join(staging, 'dist', file));
-    }
-
-    const originalEntries = asar.listPackage(sourceArchive);
-    for (const file of originalEntries) {
-      const stat = asar.statFile(sourceArchive, file.slice(1));
-      if (stat.unpacked && !file.replaceAll('\\', '/').startsWith('/node_modules/chrome-devtools-mcp/')) {
-        throw new Error('Unexpected unpacked file; not installing.');
-      }
-    }
-
-    const hasUnpacked = originalEntries.some(file => {
-      const s = asar.statFile(sourceArchive, file.slice(1));
-      return s && s.unpacked;
-    });
-
-    if (hasUnpacked) {
-      await asar.createPackageWithOptions(staging, packed, { unpackDir: '**/chrome-devtools-mcp' });
-    } else {
-      await asar.createPackageWithOptions(staging, packed, {});
-    }
-
-    let verified = 0;
-    const allowedChanges = ['dist/utils.js', 'dist/preload.js', ...additions.map(f => 'dist/' + f)].map(p => path.normalize(p));
-    for (const file of originalEntries) {
-      const name = path.normalize(file.slice(1));
-      const before = asar.statFile(sourceArchive, name);
-      const after = asar.statFile(packed, name);
-      if (before.files || before.link) continue;
-      if (!!before.unpacked !== !!after.unpacked) throw new Error(`Unpack flag changed: ${name}`);
-      if (!allowedChanges.includes(name) &&
-          sha(asar.extractFile(sourceArchive, name)) !== sha(asar.extractFile(packed, name))) {
-        throw new Error(`Unexpected file change: ${name}`);
-      }
-      verified++;
-    }
-
-    const previousInstalledBackup = path.join(backupDir, `pre-meter-${version}.asar`);
-    if (!fs.existsSync(previousInstalledBackup)) {
-      fs.copyFileSync(backup, previousInstalledBackup);
-    }
-    const previousInstalledSha256 = sha(fs.readFileSync(previousInstalledBackup));
-
-    const manifest = {
-      meterVersion: require('./package.json').version || '3.0.0',
-      version,
-      installed,
-      backup,
-      previousInstalledBackup,
-      previousInstalledSha256,
-      originalSha256: sha(fs.readFileSync(backup)),
-      patchedSha256: sha(fs.readFileSync(packed)),
-      originalFilesVerified: verified,
-      added: additions.map(f => 'dist/' + f),
-      modified: ['dist/utils.js', 'dist/preload.js'],
-      installedAt: new Date().toISOString()
-    };
-
+  // 1. Cleanly migrate off legacy v3.1.x full-ASAR utils.js patches if present on the same host version
+  const preStatus = inspectAsarStatus(installed);
+  if (preStatus.hasLegacyUtilsPatch && activeManifestPath) {
     try {
-      fs.copyFileSync(packed, installed);
-    } catch (err) {
-      if (err.code === 'EBUSY' || err.code === 'EPERM') {
-        throw new Error(`无法写入目标文件 (${installed})：文件正被运行中的 Antigravity 锁定。请先完全退出 Antigravity 客户端后再运行！`);
+      const prev = JSON.parse(fs.readFileSync(activeManifestPath, 'utf8'));
+      if (prev && prev.backup && fs.existsSync(prev.backup)) {
+        const curSha = sha(fs.readFileSync(installed));
+        if (
+          (curSha === prev.patchedSha256 || canRecoverDriftedMeterArchive(installed, prev.backup)) &&
+          sha(fs.readFileSync(prev.backup)) === prev.originalSha256
+        ) {
+          fs.copyFileSync(prev.backup, installed);
+        }
       }
-      throw err;
-    }
-    if (sha(fs.readFileSync(installed)) !== manifest.patchedSha256) {
-      throw new Error('Installed checksum mismatch');
-    }
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-    const liveInjected = await tryHotInject();
-    return { ...manifest, liveInjected };
-  } finally {
-    try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(packed, { force: true }); } catch {}
-    try { fs.rmSync(packed + '.unpacked', { recursive: true, force: true }); } catch {}
+    } catch {}
   }
+  // C1 Safety Check: never stack v3.2 hook onto a still-patched v3.1 legacy ASAR
+  const postMigrateStatus = preStatus.hasLegacyUtilsPatch ? inspectAsarStatus(installed) : preStatus;
+  if (postMigrateStatus.hasLegacyUtilsPatch) {
+    throw new Error(
+      `检测到旧版 (<= v3.1) 全包补丁仍在 ${installed} 中生效且无法在线还原（文件正被运行中的客户端占用或备份缺失）。请先退出一次 Antigravity 客户端后再运行 node cli.js install 完成平滑迁移！`
+    );
+  }
+
+  // 2. Deploy external loader.js + runtime files + config.json
+  const deployedRuntimeDir = deployRuntimeFiles(stateDir);
+  const effectiveRuntimeRoot = devMode ? __dirname : deployedRuntimeDir;
+  const loaderPath = path.join(stateDir, 'loader.js');
+  const undoFilePath = path.join(stateDir, 'state', 'asar-undo.json');
+  const bootStatePath = path.join(stateDir, 'state', 'boot.json');
+  const meterVersion = require('./package.json').version || '3.2.0';
+  const nodePath = resolveStandaloneNodePath(installed);
+
+  fs.mkdirSync(path.join(stateDir, 'state'), { recursive: true });
+  const config = {
+    schemaVersion: 1,
+    meterVersion,
+    mode: devMode ? 'dev' : 'release',
+    disabled: false,
+    autoHeal: Boolean(nodePath),
+    asarPath: installed,
+    runtimeRoot: effectiveRuntimeRoot,
+    repoRoot: __dirname,
+    nodePath,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(path.join(stateDir, 'config.json'), JSON.stringify(config, null, 2));
+
+  // Clear any prior boot circuit-breaker trip so the newly installed runtime runs cleanly
+  try {
+    if (fs.existsSync(bootStatePath)) fs.unlinkSync(bootStatePath);
+  } catch {}
+
+  // 3. Apply sub-10ms in-place 1-line hook to app.asar entry (dist/main.js)
+  let patchRes;
+  try {
+    patchRes = patchAsarEntry({
+      asarPath: installed,
+      loaderPath,
+      undoFilePath,
+      allowUnknownFuse: forceMode
+    });
+  } catch (err) {
+    if (err.code === 'EBUSY' || err.code === 'EPERM') {
+      throw new Error(`无法写入目标文件 (${installed})：文件正被锁定，请先退出 Antigravity 客户端后再试。`);
+    }
+    throw err;
+  }
+
+  const manifest = {
+    patchArchitecture: 'v3.2-hook',
+    meterVersion,
+    version: patchRes.appVersion,
+    installed,
+    entryPath: patchRes.entryPath,
+    loaderPath,
+    runtimeRoot: effectiveRuntimeRoot,
+    undoFilePath,
+    patchMode: patchRes.mode,
+    patchElapsedMs: patchRes.elapsedMs,
+    autoHealReady: Boolean(nodePath),
+    nodePath,
+    installedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  const liveInjected = await tryHotInject();
+  return { ...manifest, liveInjected };
 }
 
 if (require.main === module) {
@@ -337,4 +398,11 @@ if (require.main === module) {
     });
 }
 
-module.exports = { install, findAsarPath, tryHotInject };
+module.exports = {
+  install,
+  findAsarPath,
+  tryHotInject,
+  deployRuntimeFiles,
+  triggerReloadSignal,
+  resolveStandaloneNodePath
+};

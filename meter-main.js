@@ -1,21 +1,57 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+
 let ipcMain = null;
 let app = null;
 let electronSession = null;
+let electronWebContents = null;
 try {
-  ({ ipcMain, app, session: electronSession } = require('electron'));
+  ({
+    ipcMain,
+    app,
+    session: electronSession,
+    webContents: electronWebContents
+  } = require('electron'));
 } catch {}
-const { collectJsonAsync, collectTokenHistoryJsonAsync } = require('./meter-collector');
+
+const {
+  collectJsonAsync,
+  collectTokenHistoryJsonAsync,
+  pollGeneratorMetadataJsonAsync
+} = require('./meter-collector');
+const {
+  isRemoteWebContents,
+  isHostAuxOrRemoteWindow,
+  resolveOwningWindowForWebContents,
+  getCachedHostModule
+} = require('./host-adapter');
+const { resolveLsAuth, getActiveLsOrigin } = require('./auth-provider');
+
+let activeStateDir = null;
+let activeRuntimeRoot = __dirname;
+let onHealthyCallback = null;
+let preloadMode = 'none';
+let lastAuthSource = 'none';
+
+function getEffectiveStateDir() {
+  if (activeStateDir) return activeStateDir;
+  if (process.env.AG_METER_STATE_DIR) return process.env.AG_METER_STATE_DIR;
+  const os = require('os');
+  if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'AntigravityContextMeter');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'AntigravityContextMeter');
+  }
+  return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'AntigravityContextMeter');
+}
 
 let cachedProxyConfig = undefined;
 function ensureProxyEnvironment(targetEnv = process.env) {
   try {
     if (cachedProxyConfig === undefined) {
-      const os = require('os');
-      const localBase = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-      const cfgPath = path.join(localBase, 'AntigravityContextMeter', 'proxy.json');
+      const cfgPath = path.join(getEffectiveStateDir(), 'proxy.json');
       cachedProxyConfig = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : null;
     }
     const cfg = cachedProxyConfig;
@@ -38,42 +74,38 @@ ensureProxyEnvironment(process.env);
 exports.ensureProxyEnvironment = ensureProxyEnvironment;
 
 let cachedMeterSource = '';
-let cachedMeterVersion = '3.1.1';
-function getMeterSource() {
-  if (cachedMeterSource) return cachedMeterSource;
+let cachedMeterVersion = '3.2.0';
+function getMeterSource(forceReload = false) {
+  if (cachedMeterSource && !forceReload) return cachedMeterSource;
   try {
-    const coreCode = fs.readFileSync(path.join(__dirname, 'meter-core.js'), 'utf8');
-    const rendererCode = fs.readFileSync(path.join(__dirname, 'meter-renderer.js'), 'utf8');
-    const vm = rendererCode.match(/version:\s*['"]([^'"]+)['"]/);
+    const coreCode = fs.readFileSync(path.join(activeRuntimeRoot, 'meter-core.js'), 'utf8');
+    const rendererCode = fs.readFileSync(path.join(activeRuntimeRoot, 'meter-renderer.js'), 'utf8');
+    const vm = rendererCode.match(/(?:METER_VERSION\s*=\s*|version:\s*)['"]([^'"]+)['"]/);
     if (vm && vm[1]) cachedMeterVersion = vm[1];
     cachedMeterSource = `${coreCode}\n${rendererCode}\ntrue;`;
     return cachedMeterSource;
-  } catch (e) {
+  } catch {
     return '';
   }
 }
-getMeterSource();
 
 let lastRuntimeStampKey = '';
-function recordRuntimeHeartbeat(origin) {
+function recordRuntimeHeartbeat(origin, extra = {}) {
   try {
     if (!origin) return;
-    const os = require('os');
-    const stateDir = process.env.AG_METER_STATE_DIR || (
-      process.platform === 'win32'
-        ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'AntigravityContextMeter')
-        : process.platform === 'darwin'
-          ? path.join(os.homedir(), 'Library', 'Application Support', 'AntigravityContextMeter')
-          : path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'AntigravityContextMeter')
-    );
-    const key = `${process.pid}:${origin}:${cachedMeterVersion}`;
-    if (key === lastRuntimeStampKey) return;
+    if (extra.authSource) lastAuthSource = extra.authSource;
+    const stateDir = getEffectiveStateDir();
+    const key = `${process.pid}:${origin}:${cachedMeterVersion}:${preloadMode}:${lastAuthSource}`;
+    if (key === lastRuntimeStampKey && !extra.force) return;
     lastRuntimeStampKey = key;
     fs.mkdirSync(stateDir, { recursive: true });
     const stampPath = path.join(stateDir, 'runtime-status.json');
     const tmpPath = `${stampPath}.tmp-${process.pid}`;
     fs.writeFileSync(tmpPath, JSON.stringify({
       meterVersion: cachedMeterVersion,
+      hookVersion: 1,
+      preloadMode,
+      authSource: lastAuthSource,
       appVersion: typeof app?.getVersion === 'function' ? app.getVersion() : null,
       pid: process.pid,
       origin,
@@ -85,17 +117,28 @@ function recordRuntimeHeartbeat(origin) {
 
 function isAuxiliaryInternalUrl(rawUrl) {
   const s = String(rawUrl || '');
-  return s.startsWith('data:') || s.startsWith('plugin:') || s.startsWith('devtools:');
+  if (!s) return false;
+  return (
+    s.startsWith('data:') ||
+    s.startsWith('plugin:') ||
+    s.startsWith('devtools:') ||
+    s.startsWith('agy-browser-stream:') ||
+    s.startsWith('chrome-extension:')
+  );
+}
+
+function isLocalHubOriginUrl(rawUrl) {
+  return /^https:\/\/127\.0\.0\.1:\d+\//.test(String(rawUrl || ''));
 }
 
 function isLocalWebContentsTarget(wc, opts = {}) {
   if (!wc || wc.isDestroyed?.()) return false;
   try {
-    const wb = opts.windowBackends ?? require('./remote/windowBackends');
-    if (wb && typeof wb.remoteBackendOf === 'function' && wb.remoteBackendOf(wc)) {
+    if (typeof wc.getType === 'function' && wc.getType() === 'webview') {
       return false;
     }
   } catch {}
+  if (isRemoteWebContents(wc, opts)) return false;
   try {
     const defaultSes = opts.defaultSession !== undefined ? opts.defaultSession : electronSession?.defaultSession;
     if (defaultSes && wc.session && wc.session !== defaultSes) {
@@ -107,19 +150,7 @@ function isLocalWebContentsTarget(wc, opts = {}) {
 
 function isLocalWindowTarget(win, opts = {}) {
   if (!win || win.isDestroyed?.()) return false;
-  if (win.__isWebviewPopupWindow) return false;
-  try {
-    const hw = opts.hubWindows ?? require('./hubWindows');
-    if (hw && typeof hw.isAuxWindow === 'function' && hw.isAuxWindow(win)) {
-      return false;
-    }
-  } catch {}
-  try {
-    const wb = opts.windowBackends ?? require('./remote/windowBackends');
-    if (wb && typeof wb.isLocalAppWindow === 'function' && !wb.isLocalAppWindow(win)) {
-      return false;
-    }
-  } catch {}
+  if (isHostAuxOrRemoteWindow(win, opts)) return false;
   try {
     const directWc = win.webContents;
     if (directWc && !isLocalWebContentsTarget(directWc, opts)) {
@@ -135,10 +166,16 @@ exports.isLocalWindowTarget = isLocalWindowTarget;
 function isLocalMainFrameSender(event, opts = {}) {
   try {
     if (event?.sender && !isLocalWebContentsTarget(event.sender, opts)) return null;
+    if (event?.sender) {
+      const owningWin = resolveOwningWindowForWebContents(event.sender, opts);
+      if (owningWin && isHostAuxOrRemoteWindow(owningWin, opts)) return null;
+    }
     const rawUrl = event?.senderFrame?.url || event?.sender?.getURL?.() || '';
     const url = new URL(rawUrl);
     if (url.protocol !== 'https:' || url.hostname !== '127.0.0.1') return null;
     if (event.senderFrame && event.sender?.mainFrame && event.senderFrame !== event.sender.mainFrame) return null;
+    const activeLsOrigin = getActiveLsOrigin(opts);
+    if (activeLsOrigin && url.origin !== activeLsOrigin) return null;
     return url;
   } catch {
     return null;
@@ -146,22 +183,6 @@ function isLocalMainFrameSender(event, opts = {}) {
 }
 
 exports.isLocalMainFrameSender = isLocalMainFrameSender;
-
-function resolveTargetWindow(sender) {
-  try {
-    const { BrowserWindow } = require('electron');
-    const direct = BrowserWindow.fromWebContents(sender);
-    if (direct && !direct.isDestroyed?.()) return direct;
-  } catch {}
-  try {
-    const utils = require('./utils');
-    if (typeof utils.resolveHubWindowFromWebContents === 'function') {
-      const hubWin = utils.resolveHubWindowFromWebContents(sender);
-      if (hubWin && !hubWin.isDestroyed?.()) return hubWin;
-    }
-  } catch {}
-  return null;
-}
 
 function getWindowWebContents(win, opts = {}) {
   if (!isLocalWindowTarget(win, opts)) return null;
@@ -172,8 +193,8 @@ function getWindowWebContents(win, opts = {}) {
     }
   } catch {}
   try {
-    const utils = require('./utils');
-    if (typeof utils.getHubWebContents === 'function') {
+    const utils = opts.utils ?? getCachedHostModule('utils', opts);
+    if (utils && typeof utils.getHubWebContents === 'function') {
       const hubWc = utils.getHubWebContents(win);
       if (hubWc && isLocalWebContentsTarget(hubWc, opts) && !isAuxiliaryInternalUrl(hubWc.getURL?.())) {
         return hubWc;
@@ -185,7 +206,7 @@ function getWindowWebContents(win, opts = {}) {
     if (Array.isArray(children)) {
       for (const view of children) {
         const wc = view?.webContents;
-        if (wc && isLocalWebContentsTarget(wc, opts) && /^https:\/\/127\.0\.0\.1:\d+\//.test(String(wc.getURL?.() || ''))) {
+        if (wc && isLocalWebContentsTarget(wc, opts) && isLocalHubOriginUrl(wc.getURL?.())) {
           return wc;
         }
       }
@@ -202,35 +223,65 @@ function getWindowWebContents(win, opts = {}) {
 
 exports.getWindowWebContents = getWindowWebContents;
 
-let registered = false;
+function applyWindowsMenuBarFix(win) {
+  if (process.platform !== 'win32' || !win || win.isDestroyed?.()) return;
+  try {
+    if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
+    win.autoHideMenuBar = true;
+  } catch {}
+}
+
+let registeredIpc = false;
+let registeredPreload = false;
 const boundWindows = new WeakSet();
 const boundWebContents = new WeakSet();
+const activeLocalWebContents = new Set();
 const injectionTimers = new WeakMap();
 const wcProbeTimers = new WeakMap();
+const inflightInjections = new WeakMap();
 
-function clearWindowTimers(win) {
-  const inj = injectionTimers.get(win);
+function clearTargetTimers(keyObj) {
+  const inj = injectionTimers.get(keyObj);
   if (inj) {
     clearTimeout(inj);
-    injectionTimers.delete(win);
+    injectionTimers.delete(keyObj);
   }
-  const probe = wcProbeTimers.get(win);
+  const probe = wcProbeTimers.get(keyObj);
   if (probe) {
     clearInterval(probe);
-    wcProbeTimers.delete(win);
+    wcProbeTimers.delete(keyObj);
+  }
+}
+
+async function callWithAuthRetry(origin, senderWc, fn) {
+  let auth = await resolveLsAuth(origin, senderWc);
+  if (auth?.source) recordRuntimeHeartbeat(origin, { authSource: auth.source });
+  try {
+    return await fn(auth?.csrfToken || '');
+  } catch (err) {
+    if (err && err.code === 'AUTH') {
+      auth = await resolveLsAuth(origin, senderWc);
+      if (auth?.csrfToken) {
+        recordRuntimeHeartbeat(origin, { authSource: auth.source });
+        return await fn(auth.csrfToken);
+      }
+    }
+    throw err;
   }
 }
 
 function registerIpcOnce() {
-  if (registered || !ipcMain || typeof ipcMain.handle !== 'function') return;
-  registered = true;
+  if (registeredIpc || !ipcMain || typeof ipcMain.handle !== 'function') return;
+  registeredIpc = true;
 
   ipcMain.handle('context-meter:scan', async (event, id, force) => {
     const url = isLocalMainFrameSender(event);
     if (!url) throw new Error('仅允许本机主聊天窗口');
     recordRuntimeHeartbeat(url.origin);
     try {
-      const out = await collectJsonAsync(url.origin, id, { force: force === true });
+      const out = await callWithAuthRetry(url.origin, event.sender, csrfToken =>
+        collectJsonAsync(url.origin, id, { force: force === true, csrfToken })
+      );
       return { ok: true, json: out.json, stats: out.stats };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -242,8 +293,23 @@ function registerIpcOnce() {
     if (!url) throw new Error('仅允许本机主聊天窗口');
     recordRuntimeHeartbeat(url.origin);
     try {
-      const out = await collectTokenHistoryJsonAsync({ origin: url.origin, force: force === true });
+      const out = await callWithAuthRetry(url.origin, event.sender, csrfToken =>
+        collectTokenHistoryJsonAsync({ origin: url.origin, force: force === true, csrfToken })
+      );
       return { ok: true, json: out.json, stats: out.stats };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('context-meter:poll-metadata', async (event, id, offset) => {
+    const url = isLocalMainFrameSender(event);
+    if (!url) throw new Error('仅允许本机主聊天窗口');
+    try {
+      const out = await callWithAuthRetry(url.origin, event.sender, csrfToken =>
+        pollGeneratorMetadataJsonAsync(url.origin, id, offset, { csrfToken })
+      );
+      return { ok: true, json: out.json };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -251,14 +317,10 @@ function registerIpcOnce() {
 
   ipcMain.handle('context-meter:sync-overlay', async (event, options) => {
     try {
-      const targetWin = resolveTargetWindow(event.sender);
-      if (!targetWin || targetWin.isDestroyed?.()) return { ok: false };
-      if (process.platform === 'win32') {
-        try {
-          if (typeof targetWin.setMenuBarVisibility === 'function') targetWin.setMenuBarVisibility(false);
-          targetWin.autoHideMenuBar = true;
-        } catch {}
-      }
+      if (!isLocalMainFrameSender(event)) return { ok: false };
+      const targetWin = resolveOwningWindowForWebContents(event.sender);
+      if (!targetWin || targetWin.isDestroyed?.() || isHostAuxOrRemoteWindow(targetWin)) return { ok: false };
+      applyWindowsMenuBarFix(targetWin);
       if (typeof targetWin.setTitleBarOverlay !== 'function') return { ok: true };
       const patch = {};
       if (options && typeof options.color === 'string') patch.color = options.color;
@@ -283,49 +345,84 @@ function registerIpcOnce() {
   });
 }
 
-const inflightInjections = new WeakMap();
-
-async function ensureMeterInjected(win, options = {}) {
+function registerSessionPreloadOnce() {
+  if (registeredPreload || !electronSession?.defaultSession) return;
+  const preloadFile = path.join(activeRuntimeRoot, 'meter-preload.js');
+  if (!fs.existsSync(preloadFile)) return;
+  const ses = electronSession.defaultSession;
   try {
-    if (!isLocalWindowTarget(win)) return false;
-    const wc = getWindowWebContents(win);
-    const url = wc && !wc.isDestroyed?.() ? (wc.getURL?.() || '') : '';
-    if (!wc || wc.isDestroyed?.() || !/^https:\/\/127\.0\.0\.1:\d+\//.test(url)) {
-      const attempt = Number(options.attempt || 0);
-      const delays = [300, 600, 1000, 1500, 2500];
-      if (attempt < delays.length && win && !win.isDestroyed?.()) {
-        const prevTimer = injectionTimers.get(win);
-        if (prevTimer) clearTimeout(prevTimer);
-        const t = setTimeout(() => {
-          injectionTimers.delete(win);
-          void ensureMeterInjected(win, { ...options, attempt: attempt + 1 });
-        }, delays[attempt]);
-        t.unref?.();
-        injectionTimers.set(win, t);
-      }
-      return false;
+    if (typeof ses.registerPreloadScript === 'function') {
+      ses.registerPreloadScript({ type: 'frame', filePath: preloadFile });
+      preloadMode = 'registerPreloadScript';
+      registeredPreload = true;
+      return;
     }
+  } catch {}
+  try {
+    if (typeof ses.setPreloads === 'function' && typeof ses.getPreloads === 'function') {
+      const existing = ses.getPreloads() || [];
+      if (!existing.includes(preloadFile)) {
+        ses.setPreloads([...existing, preloadFile]);
+      }
+      preloadMode = 'setPreloads';
+      registeredPreload = true;
+    }
+  } catch {}
+}
+
+async function injectIntoWebContents(wc, options = {}) {
+  if (!wc || wc.isDestroyed?.() || !isLocalWebContentsTarget(wc)) return false;
+  const earlyWin = resolveOwningWindowForWebContents(wc);
+  if (earlyWin && isHostAuxOrRemoteWindow(earlyWin)) return false;
+  const url = String(wc.getURL?.() || '');
+  if (!isLocalHubOriginUrl(url)) {
+    const attempt = Number(options.attempt || 0);
+    const delays = [300, 600, 1000, 1500, 2500];
+    if (attempt < delays.length && !wc.isDestroyed?.()) {
+      const prev = injectionTimers.get(wc);
+      if (prev) clearTimeout(prev);
+      const t = setTimeout(() => {
+        injectionTimers.delete(wc);
+        void injectIntoWebContents(wc, { ...options, attempt: attempt + 1 });
+      }, delays[attempt]);
+      t.unref?.();
+      injectionTimers.set(wc, t);
+    }
+    return false;
+  }
+
+  try {
+    const owningWin = resolveOwningWindowForWebContents(wc);
+    if (owningWin) applyWindowsMenuBarFix(owningWin);
 
     const existing = inflightInjections.get(wc);
-    if (existing && !options.force) return await existing;
+    if (existing && !options.force && !options.reloadSource) return await existing;
 
     const runInject = (async () => {
       if (existing) {
         try { await existing; } catch {}
       }
       if (wc.isDestroyed?.()) return false;
-      if (!options.force) {
+      if (!options.force && !options.reloadSource) {
         try {
           const alive = await wc.executeJavaScript(
             'Boolean(window.__AGContextMeter && document.getElementById("ag-context-meter") && (window.__AGContextMeter.ensureAlive ? window.__AGContextMeter.ensureAlive() : true))'
           );
-          if (alive === true) return true;
+          if (alive === true) {
+            try { onHealthyCallback?.(); } catch {}
+            return true;
+          }
         } catch {}
       }
-      const runtimeSource = getMeterSource();
+      const runtimeSource = getMeterSource(Boolean(options.reloadSource));
       if (!runtimeSource) return false;
       await wc.executeJavaScript(runtimeSource);
-      try { recordRuntimeHeartbeat(new URL(url).origin); } catch {}
+      try {
+        const origin = new URL(url).origin;
+        const auth = await resolveLsAuth(origin, wc);
+        recordRuntimeHeartbeat(origin, { authSource: auth?.source || 'none', force: Boolean(options.reloadSource) });
+      } catch {}
+      try { onHealthyCallback?.(); } catch {}
       return true;
     })();
 
@@ -338,6 +435,29 @@ async function ensureMeterInjected(win, options = {}) {
   } catch (error) {
     const attempt = Number(options.attempt || 0);
     const delays = [350, 1000, 2500];
+    if (attempt < delays.length && !wc.isDestroyed?.()) {
+      const prev = injectionTimers.get(wc);
+      if (prev) clearTimeout(prev);
+      const t = setTimeout(() => {
+        injectionTimers.delete(wc);
+        void injectIntoWebContents(wc, { ...options, attempt: attempt + 1 });
+      }, delays[attempt]);
+      t.unref?.();
+      injectionTimers.set(wc, t);
+    } else {
+      console.warn('[Context Meter]', error?.message || String(error));
+    }
+    return false;
+  }
+}
+
+async function ensureMeterInjected(win, options = {}) {
+  if (!isLocalWindowTarget(win)) return false;
+  applyWindowsMenuBarFix(win);
+  const wc = getWindowWebContents(win);
+  if (!wc || wc.isDestroyed?.()) {
+    const attempt = Number(options.attempt || 0);
+    const delays = [300, 600, 1000, 1500, 2500];
     if (attempt < delays.length && win && !win.isDestroyed?.()) {
       const prevTimer = injectionTimers.get(win);
       if (prevTimer) clearTimeout(prevTimer);
@@ -347,14 +467,53 @@ async function ensureMeterInjected(win, options = {}) {
       }, delays[attempt]);
       t.unref?.();
       injectionTimers.set(win, t);
-    } else {
-      console.warn('[Context Meter]', error?.message || String(error));
     }
     return false;
   }
+  bindWebContentsTarget(wc);
+  return injectIntoWebContents(wc, options);
 }
 
 exports.ensureMeterInjected = ensureMeterInjected;
+
+function bindWebContentsTarget(wc) {
+  if (!wc || wc.isDestroyed?.() || !isLocalWebContentsTarget(wc)) return false;
+  const initialWin = resolveOwningWindowForWebContents(wc);
+  if (initialWin && isHostAuxOrRemoteWindow(initialWin)) return false;
+  if (boundWebContents.has(wc)) return true;
+  boundWebContents.add(wc);
+  activeLocalWebContents.add(wc);
+
+  setImmediate(() => {
+    const owningWin = resolveOwningWindowForWebContents(wc);
+    if (owningWin && !isHostAuxOrRemoteWindow(owningWin)) applyWindowsMenuBarFix(owningWin);
+  });
+
+  wc.on?.('did-finish-load', () => {
+    void injectIntoWebContents(wc, { force: true });
+  });
+  wc.on?.('dom-ready', () => {
+    const owningWin = resolveOwningWindowForWebContents(wc);
+    if (owningWin && !isHostAuxOrRemoteWindow(owningWin)) applyWindowsMenuBarFix(owningWin);
+    void injectIntoWebContents(wc, { force: false });
+  });
+  wc.on?.('did-navigate', () => {
+    void injectIntoWebContents(wc, { force: false });
+  });
+  wc.on?.('did-navigate-in-page', () => {
+    void injectIntoWebContents(wc, { force: false });
+  });
+  wc.on?.('zoom-changed', () => {
+    try {
+      Promise.resolve(wc.executeJavaScript('window.__AGContextMeter?.ensureAlive?.()')).catch(() => {});
+    } catch {}
+  });
+  wc.once?.('destroyed', () => {
+    activeLocalWebContents.delete(wc);
+    clearTargetTimers(wc);
+  });
+  return true;
+}
 
 function bindWindowWebContents(win) {
   const wc = getWindowWebContents(win);
@@ -364,55 +523,26 @@ function bindWindowWebContents(win) {
     clearInterval(probe);
     wcProbeTimers.delete(win);
   }
-  if (!boundWebContents.has(wc)) {
-    boundWebContents.add(wc);
-    wc.on?.('did-finish-load', () => {
-      void ensureMeterInjected(win, { force: true });
-    });
-    wc.on?.('dom-ready', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on?.('did-navigate', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on?.('did-navigate-in-page', () => {
-      void ensureMeterInjected(win, { force: false });
-    });
-    wc.on?.('zoom-changed', () => {
-      try {
-        void wc.executeJavaScript('window.__AGContextMeter?.ensureAlive?.()');
-      } catch {}
-    });
-  }
-  return true;
+  return bindWebContentsTarget(wc);
 }
 
-exports.installContextMeter = function (win) {
+exports.installContextMeter = function installContextMeter(win) {
   registerIpcOnce();
+  registerSessionPreloadOnce();
   if (!isLocalWindowTarget(win)) return;
 
   if (!boundWindows.has(win)) {
     boundWindows.add(win);
-    if (process.platform === 'win32') {
-      try {
-        if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
-        win.autoHideMenuBar = true;
-      } catch {}
-    }
+    applyWindowsMenuBarFix(win);
     const onWinVisibleOrActive = () => {
-      if (process.platform === 'win32') {
-        try {
-          if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
-          win.autoHideMenuBar = true;
-        } catch {}
-      }
+      applyWindowsMenuBarFix(win);
       bindWindowWebContents(win);
       void ensureMeterInjected(win, { force: false });
     };
     win.on?.('show', onWinVisibleOrActive);
     win.on?.('restore', onWinVisibleOrActive);
     win.on?.('focus', onWinVisibleOrActive);
-    win.on?.('closed', () => clearWindowTimers(win));
+    win.on?.('closed', () => clearTargetTimers(win));
   }
 
   const boundNow = bindWindowWebContents(win);
@@ -435,44 +565,89 @@ exports.installContextMeter = function (win) {
   }
 };
 
-try {
-  if (app && typeof app.on === 'function') {
-    const onWindowCreated = (_event, win) => {
+let reloadWatcher = null;
+let lastReloadSignalText = '';
+function startReloadSignalWatcher() {
+  if (reloadWatcher) return;
+  try {
+    const stateSubDir = path.join(getEffectiveStateDir(), 'state');
+    fs.mkdirSync(stateSubDir, { recursive: true });
+    const sigFile = path.join(stateSubDir, 'reload.signal');
+    if (fs.existsSync(sigFile)) {
+      try { lastReloadSignalText = fs.readFileSync(sigFile, 'utf8'); } catch {}
+    }
+    reloadWatcher = fs.watch(stateSubDir, (_eventType, filename) => {
+      if (filename && filename !== 'reload.signal') return;
       try {
-        exports.installContextMeter(win);
-        void ensureMeterInjected(win, { force: false });
-      } catch {}
-    };
-    app.on('browser-window-created', onWindowCreated);
-    app.on('base-window-created', onWindowCreated);
-    const listLocalHubWindows = utils => {
-      if (typeof utils.getLocalHubWindows === 'function') return utils.getLocalHubWindows();
-      if (typeof utils.getHubWindows === 'function') return utils.getHubWindows().filter(w => isLocalWindowTarget(w));
-      return [];
-    };
-    app.on('activate', () => {
-      try {
-        const utils = require('./utils');
-        const wins = listLocalHubWindows(utils);
-        for (const w of wins) {
-          exports.installContextMeter(w);
-          void ensureMeterInjected(w, { force: true });
+        if (!fs.existsSync(sigFile)) return;
+        const txt = fs.readFileSync(sigFile, 'utf8');
+        if (!txt || txt === lastReloadSignalText) return;
+        lastReloadSignalText = txt;
+        getMeterSource(true);
+        for (const wc of Array.from(activeLocalWebContents)) {
+          if (!wc.isDestroyed?.() && isLocalHubOriginUrl(wc.getURL?.())) {
+            void injectIntoWebContents(wc, { force: true, reloadSource: true });
+          }
         }
       } catch {}
     });
-    app.on('second-instance', () => {
-      try {
-        const utils = require('./utils');
-        setTimeout(() => {
-          try {
-            const wins = listLocalHubWindows(utils);
-            for (const w of wins) {
-              exports.installContextMeter(w);
-              void ensureMeterInjected(w, { force: true });
-            }
-          } catch {}
-        }, 120);
-      } catch {}
+    reloadWatcher.on?.('error', () => {
+      try { reloadWatcher.close(); } catch {}
+      reloadWatcher = null;
     });
+    reloadWatcher.unref?.();
+  } catch {}
+}
+
+let started = false;
+exports.start = function start(options = {}) {
+  if (options.stateDir) activeStateDir = options.stateDir;
+  if (options.runtimeRoot && fs.existsSync(options.runtimeRoot)) {
+    activeRuntimeRoot = options.runtimeRoot;
+  }
+  if (typeof options.onHealthy === 'function') {
+    onHealthyCallback = options.onHealthy;
+  }
+  getMeterSource(true);
+  registerIpcOnce();
+  registerSessionPreloadOnce();
+  startReloadSignalWatcher();
+
+  if (started) return;
+  started = true;
+
+  try {
+    if (app && typeof app.on === 'function') {
+      app.on('web-contents-created', (_event, contents) => {
+        try {
+          if (bindWebContentsTarget(contents)) {
+            void injectIntoWebContents(contents, { force: false });
+          }
+        } catch {}
+      });
+      app.on('browser-window-created', (_event, win) => {
+        try {
+          exports.installContextMeter(win);
+        } catch {}
+      });
+    }
+    if (electronWebContents && typeof electronWebContents.getAllWebContents === 'function') {
+      for (const wc of electronWebContents.getAllWebContents()) {
+        if (bindWebContentsTarget(wc)) {
+          void injectIntoWebContents(wc, { force: true });
+        }
+      }
+    }
+  } catch {}
+};
+
+// Legacy direct-require fallback (if required directly without calling start())
+try {
+  if (app && typeof app.on === 'function' && !globalThis.__agcmLoaderBootstrapped) {
+    if (typeof app.isReady === 'function' && app.isReady()) {
+      exports.start();
+    } else if (typeof app.once === 'function') {
+      app.once('ready', () => exports.start());
+    }
   }
 } catch {}

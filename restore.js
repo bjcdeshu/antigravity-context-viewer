@@ -1,5 +1,6 @@
 'use strict';
 process.noAsar = true;
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -7,6 +8,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { loadAsarEngine, getStateDir } = require('./asar-engine');
 const { isRemotePageTarget } = require('./local-api');
+const { unpatchAsarEntry, inspectAsarStatus } = require('./asar-patch');
 
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
@@ -61,14 +63,58 @@ async function tryHotDispose() {
   }
 }
 
-async function restore() {
-  const stateManifest = path.join(getStateDir(), 'installation.json');
+async function restore(options = {}) {
+  const stateDir = getStateDir();
+  const stateManifest = path.join(stateDir, 'installation.json');
   const localManifest = path.join(__dirname, 'installation.json');
   const manifestPath = fs.existsSync(stateManifest) ? stateManifest : localManifest;
+  const configPath = path.join(stateDir, 'config.json');
+
+  const markDisabledInConfig = () => {
+    if (!fs.existsSync(configPath)) return;
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')) || {};
+      cfg.disabled = true;
+      cfg.updatedAt = new Date().toISOString();
+      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+    } catch {}
+  };
+
+  if (options.asarPath) {
+    const undoFilePath = path.join(stateDir, 'state', 'asar-undo.json');
+    const res = unpatchAsarEntry({ asarPath: options.asarPath, undoFilePath });
+    markDisabledInConfig();
+    await tryHotDispose();
+    return { restored: options.asarPath, mode: res.mode, elapsedMs: res.elapsedMs };
+  }
+
   if (!fs.existsSync(manifestPath)) {
     throw new Error('installation.json not found; nothing to restore.');
   }
   const info = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+  // v3.2+ single-line hook restore (byte-exact undo in <5ms, or semantic hook strip)
+  if (info.patchArchitecture === 'v3.2-hook' || (!info.backup && info.installed)) {
+    const undoFilePath = info.undoFilePath || path.join(stateDir, 'state', 'asar-undo.json');
+    const res = unpatchAsarEntry({ asarPath: info.installed, undoFilePath });
+    markDisabledInConfig();
+    await tryHotDispose();
+    return { restored: info.installed, mode: res.mode, elapsedMs: res.elapsedMs };
+  }
+
+  // Legacy <= v3.1 full-ASAR backup restore
+  // First check if the installed archive was subsequently upgraded to v3.2 hook without legacy utils patch
+  try {
+    const st = inspectAsarStatus(info.installed);
+    if (st.hooked && !st.hasLegacyUtilsPatch) {
+      const undoFilePath = path.join(stateDir, 'state', 'asar-undo.json');
+      const res = unpatchAsarEntry({ asarPath: info.installed, undoFilePath });
+      markDisabledInConfig();
+      await tryHotDispose();
+      return { restored: info.installed, mode: res.mode, elapsedMs: res.elapsedMs };
+    }
+  } catch {}
+
   const previous = process.argv.includes('--previous');
   const backup = previous ? info.previousInstalledBackup : info.backup;
   const expected = previous ? info.previousInstalledSha256 : info.originalSha256;
@@ -86,6 +132,7 @@ async function restore() {
     }
     throw err;
   }
+  markDisabledInConfig();
   await tryHotDispose();
   return { restored: info.installed, fromBackup: backup };
 }

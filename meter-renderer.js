@@ -51,6 +51,7 @@
     dailyMap: {}
   };
 
+  const METER_VERSION = '3.2.0';
   const RING_RADIUS = 6.5;
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
@@ -318,6 +319,7 @@
     :host([data-occupancy="warn"]) #context-tooltip[data-anchor="context"] .ctx-tip-pct{color:var(--ag-ring-warn)}
     :host([data-occupancy="danger"]) #context-tooltip[data-anchor="context"] .ctx-tip-pct{color:var(--ag-ring-danger)}
     .ctx-tip-detail{font-size:var(--ag-fs-body);line-height:1.4;font-weight:var(--ag-w-regular);color:var(--ag-text-secondary);margin-top:2px}
+    .ctx-tip-detail:empty{display:none}
 
     /* 窄屏溢出菜单浮层 */
     #overflow-menu{
@@ -417,7 +419,6 @@
     .panel-header-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:1px solid var(--ag-hairline);padding-bottom:9px;margin-bottom:11px}
     .panel-title{display:flex;align-items:baseline;gap:6px;min-width:0}
     .panel-title-text{margin:0;font-size:var(--ag-fs-title);font-weight:var(--ag-w-semibold);color:var(--ag-text-primary);letter-spacing:-0.01em}
-    #v{color:var(--ag-text-muted);font-size:var(--ag-fs-meta);font-weight:var(--ag-w-regular)}
     .panel-header-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
     .panel-icon-btn{
       color:var(--ag-text-muted);font-size:var(--ag-fs-meta);line-height:1;font-weight:var(--ag-w-medium);
@@ -445,8 +446,8 @@
     }
     .pill-muted{color:var(--ag-text-muted);background:transparent;border-color:var(--ag-border)}
     .pill-good{color:var(--ag-text-muted);background:transparent;border-color:var(--ag-border)}
-    .pill-warn{color:var(--ag-warn);background:color-mix(in srgb,var(--ag-warn) 10%,transparent);border-color:color-mix(in srgb,var(--ag-warn) 32%,transparent)}
-    .pill-danger{color:var(--ag-danger);background:color-mix(in srgb,var(--ag-danger) 10%,transparent);border-color:color-mix(in srgb,var(--ag-danger) 34%,transparent)}
+    .pill-warn{color:var(--ag-warn);background:transparent;border-color:var(--ag-border)}
+    .pill-danger{color:var(--ag-danger);background:transparent;border-color:var(--ag-border)}
     button.key-pill{transition:border-color .14s ease,color .14s ease}
     button.key-pill:hover{color:var(--ag-text-primary);border-color:var(--ag-hairline-strong)}
     button.key-pill[data-mode="standard"]{color:var(--ag-accent);border-color:color-mix(in srgb,var(--ag-accent) 55%,transparent)}
@@ -480,7 +481,7 @@
     #key-used{color:var(--ag-custom-context-text,var(--ag-text-primary))}
     #speed-val{color:var(--ag-custom-speed,var(--ag-text-primary))}
     #speed-title{color:var(--ag-custom-speed,var(--ag-text-secondary))}
-    .key-takeaway{font-size:var(--ag-fs-body);color:var(--ag-text-secondary);padding-top:7px;margin-top:8px;border-top:1px solid var(--ag-hairline);line-height:1.45}
+    .key-takeaway{font-size:var(--ag-fs-meta);color:var(--ag-text-secondary);margin-top:8px;line-height:1.45}
     .key-takeaway[data-quiet="true"]{display:none}
 
     #session-cost-summary .key-stat-val.accent{color:var(--ag-accent)}
@@ -781,9 +782,9 @@
 
   <!-- 三个胶囊共用的悬停信息气泡（标题 — 主值 — 明细） -->
   <div id="context-tooltip" role="tooltip" data-visible="false" data-placement="bottom" data-anchor="context">
-    <div id="ctx-tip-title" class="ctx-tip-title">上下文窗口：</div>
-    <div id="ctx-tip-pct" class="ctx-tip-pct">数据尚未就绪</div>
-    <div id="ctx-tip-detail" class="ctx-tip-detail">正在读取当前会话上下文用量…</div>
+    <div id="ctx-tip-title" class="ctx-tip-title">上下文窗口</div>
+    <div id="ctx-tip-pct" class="ctx-tip-pct">读取中…</div>
+    <div id="ctx-tip-detail" class="ctx-tip-detail"></div>
   </div>
 
   <!-- 窄屏溢出菜单 -->
@@ -802,7 +803,7 @@
   <section id="panel" class="ag-panel" hidden aria-label="会话与上下文详情">
     <div class="panel-header-bar">
       <div class="panel-title">
-        <h3 class="panel-title-text">当前会话上下文</h3><span id="v">v3.0</span>
+        <h3 class="panel-title-text">当前会话上下文</h3><span id="v" class="sr-only">v${METER_VERSION}</span>
       </div>
       <div class="panel-header-actions">
         <button id="theme-toggle" class="panel-icon-btn" type="button" aria-label="切换浅色/深色主题" title="当前：跟随宿主（点击切换：浅色 / 深色 / 自动）">自动</button>
@@ -837,7 +838,7 @@
           <div class="key-stat"><div class="key-stat-label">预算上限</div><div id="key-limit" class="key-stat-val">—</div></div>
           <div class="key-stat"><div class="key-stat-label">剩余可用</div><div id="key-remaining" class="key-stat-val">—</div></div>
         </div>
-        <div id="key-takeaway" class="key-takeaway" data-quiet="true">正在计算核心指标…</div>
+        <div id="key-takeaway" class="key-takeaway" data-quiet="true"></div>
       </div>
 
       <!-- 分区 2: 输出速度与延迟 -->
@@ -852,7 +853,7 @@
           <div class="key-stat"><div class="key-stat-label">首字延迟</div><div id="speed-ttft" class="key-stat-val">—</div></div>
           <div class="key-stat"><div class="key-stat-label">本次输出</div><div id="speed-tokens" class="key-stat-val">—</div></div>
         </div>
-        <div id="speed-takeaway" class="key-takeaway" data-quiet="true">等待首次模型输出产生速度统计…</div>
+        <div id="speed-takeaway" class="key-takeaway" data-quiet="true" hidden></div>
       </div>
 
       <!-- 分区 3: 本会话 API 等值（含子代理汇总，无子代理时静默） -->
@@ -867,7 +868,7 @@
           <div class="key-stat"><div class="key-stat-label">缓存已省</div><div id="sess-cost-saved" class="key-stat-val">—</div></div>
         </div>
         <div class="sess-cost-meta">
-          <span id="sess-cost-meta-left" class="sess-cost-meta-left">等待请求统计产生会话费用…</span>
+          <span id="sess-cost-meta-left" class="sess-cost-meta-left"></span>
           <span id="sess-cost-meta-right" class="sess-cost-meta-right"></span>
         </div>
         <div id="sess-tree" class="sess-tree" hidden>
@@ -941,24 +942,24 @@
     <div id="view-tokens">
       <div class="token-stat-cards">
         <div class="t-card">
-          <div class="t-card-lbl"><span>全量累计</span><span id="t-total-cost" class="t-card-cost">≈ $0.00</span></div>
+          <div class="t-card-lbl"><span>全量累计</span><span id="t-total-cost" class="t-card-cost">—</span></div>
           <div class="t-card-val" id="t-total-val">--</div>
-          <div class="t-card-sub" id="t-total-sub">读取中...</div>
+          <div class="t-card-sub" id="t-total-sub"></div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>今日使用</span><span id="t-today-cost" class="t-card-cost">≈ $0.00</span></div>
+          <div class="t-card-lbl"><span>今日使用</span><span id="t-today-cost" class="t-card-cost">—</span></div>
           <div class="t-card-val" id="t-today-val">--</div>
-          <div class="t-card-sub" id="t-today-sub">读取中...</div>
+          <div class="t-card-sub" id="t-today-sub"></div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span>本月使用</span><span id="t-month-cost" class="t-card-cost">≈ $0.00</span></div>
+          <div class="t-card-lbl"><span>本月使用</span><span id="t-month-cost" class="t-card-cost">—</span></div>
           <div class="t-card-val" id="t-month-val">--</div>
-          <div class="t-card-sub" id="t-month-sub">读取中...</div>
+          <div class="t-card-sub" id="t-month-sub"></div>
         </div>
         <div class="t-card">
-          <div class="t-card-lbl"><span id="t-year-lbl">年度使用</span><span id="t-year-cost" class="t-card-cost">≈ $0.00</span></div>
+          <div class="t-card-lbl"><span id="t-year-lbl">年度使用</span><span id="t-year-cost" class="t-card-cost">—</span></div>
           <div class="t-card-val" id="t-year-val">--</div>
-          <div class="t-card-sub" id="t-year-sub">读取中...</div>
+          <div class="t-card-sub" id="t-year-sub"></div>
         </div>
       </div>
 
@@ -1012,14 +1013,14 @@
               </div>
             </div>
             <div class="heat-sum-item heat-sum-cost" id="h-sum-cost-wrap" role="button" tabindex="0" title="按真实模型单价与 >200K 分档折算的官方 API 等值（点击切换：优惠期实价 / 标准零售价）">
-              <span class="heat-sum-label" id="h-sum-cost-lbl">API 等值(实价)</span>
+              <span class="heat-sum-label" id="h-sum-cost-lbl">API 等值</span>
               <span class="heat-sum-val" id="h-sum-cost">--</span>
             </div>
           </div>
           <div class="cost-breakdown-strip" id="h-cost-breakdown">
             <div class="cost-model-bar" id="cost-model-bar" aria-label="模型等值费用构成比例"></div>
             <div class="cost-meta-row">
-              <span class="cost-model-legend" id="cost-model-legend">构成：暂无区间记录</span>
+              <span class="cost-model-legend" id="cost-model-legend">构成：—</span>
               <span class="cost-io-savings" id="cost-io-savings">
                 <span id="cost-io-text">输入 $0.00 · 输出 $0.00 · 缓存 $0.00</span>
                 <span id="cost-saved-pill" class="cost-saved-hl">缓存省 $0.00</span>
@@ -2456,9 +2457,9 @@
   const TOOLTIP_ANCHORS = { context: 'badge', speed: 'badge-speed', tokens: 'badge-tokens' };
   let tooltipAnchor = 'context';
   const tooltipContent = {
-    context: { title: '上下文窗口：', pct: '数据尚未就绪', detail: '正在读取当前会话上下文用量…' },
-    speed: { title: '输出速度：', pct: '等待模型输出', detail: '完成一次生成后显示 tok/s、首字延迟与总耗时' },
-    tokens: { title: 'Token 用量：', pct: '读取中…', detail: '点击查看 Token 用量一览' }
+    context: { title: '上下文窗口', pct: '读取中…', detail: '' },
+    speed: { title: '输出速度', pct: '等待模型输出', detail: '' },
+    tokens: { title: 'Token 用量', pct: '读取中…', detail: '' }
   };
 
   function writeTooltipContent(kind) {
@@ -3134,10 +3135,6 @@
       ctxBtn.setAttribute('data-mode', pricingMode);
       ctxBtn.title = tip;
     }
-    const sumCostLbl = el('h-sum-cost-lbl');
-    if (sumCostLbl) {
-      sumCostLbl.textContent = isStd ? 'API 等值(原价)' : 'API 等值(实价)';
-    }
   }
 
   function updateTokenCardsCosts() {
@@ -3175,9 +3172,9 @@
     }
     const sum = ANTIGRAVITY_TOKEN_DATA.summary || {};
     setTooltipContent('tokens', {
-      title: 'Token 用量：',
+      title: 'Token 用量',
       pct: `累计 ${fmtYi(Number(sum.totalTokens || sum.grandTotalTokens) || 0)} · 今日 ${fmtYi(Number(sum.todayTokens) || 0)}`,
-      detail: `API 等值 ≈ ${fmtUSD(totalAgg.totalCostUSD)}（${pricingMode === 'standard' ? '标准零售价' : '优惠期实价'}）· 今日 ≈ ${fmtUSD(todayAgg.totalCostUSD)}`
+      detail: `API 等值 ≈ ${fmtUSD(totalAgg.totalCostUSD)} · 今日 ≈ ${fmtUSD(todayAgg.totalCostUSD)}`
     });
   }
 
@@ -3849,7 +3846,7 @@
         if (restUSD >= 0.01) parts.push(`其余 ${fmtUSD(restUSD)}`);
         modelLegend.textContent = `构成：${parts.join(' · ')}`;
       } else {
-        modelLegend.textContent = '构成：暂无区间记录';
+        modelLegend.textContent = '构成：—';
       }
     }
 
@@ -4510,7 +4507,7 @@
     const tipPct = { textContent: '' };
     const tipDetail = { textContent: '' };
 
-    // 区分常态颜色与高占用告警状态
+    // 区分常态颜色与高占用着色状态
     let occupancy = 'normal';
     if (danger || (pct != null && pct >= 90)) {
       occupancy = 'danger';
@@ -4547,15 +4544,15 @@
     if (!tipTitle || !tipPct || !tipDetail) return;
 
     if (d?.exceeded) {
-      tipTitle.textContent = '上下文窗口（超限告警）：';
-      tipPct.textContent = '100% 已用（已超出上限）';
+      tipTitle.textContent = '上下文窗口 · 已超限';
+      tipPct.textContent = '100% 已用';
       tipDetail.textContent = d.serviceLimit
-        ? `已超上限，共 ${fmtBubbleToken(d.serviceLimit)} token`
-        : '服务端已拒绝输入（超出容量上限）';
+        ? `服务端上限 ${fmtBubbleToken(d.serviceLimit)} token`
+        : '服务端已拒绝本轮输入';
     } else if (d?.error) {
       const ec = d.errorClassification;
-      tipTitle.textContent = `上下文窗口（${ec?.shortBadge || '请求异常'}）：`;
-      tipPct.textContent = ec?.headline || '最近请求失败（占用未知）';
+      tipTitle.textContent = `上下文窗口 · ${ec?.shortBadge || '请求异常'}`;
+      tipPct.textContent = ec?.headline || '最近请求失败';
       tipDetail.textContent = d?.actual != null && d?.budget
         ? `保留上次上下文 ${fmtBubbleToken(d.actual)} / ${fmtBubbleToken(d.budget)} token`
         : (d?.budget
@@ -4564,12 +4561,12 @@
     } else if (stale && d?.actual != null && d?.budget) {
       const usedRound = Math.min(100, Math.max(0, Math.round((d.actual / d.budget) * 100)));
       const remRound = Math.max(0, 100 - usedRound);
-      tipTitle.textContent = '上下文窗口（数据过期）：';
-      tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}% · 统计延迟）`;
+      tipTitle.textContent = '上下文窗口 · 统计延迟';
+      tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}%）`;
       tipDetail.textContent = `已用 ${fmtBubbleToken(d.actual)} token，共 ${fmtBubbleToken(d.budget)}`;
     } else if (stale) {
-      tipTitle.textContent = '上下文窗口（数据过期）：';
-      tipPct.textContent = '统计读取延迟（剩余未知）';
+      tipTitle.textContent = '上下文窗口 · 统计延迟';
+      tipPct.textContent = '剩余未知';
       tipDetail.textContent = session
         ? `会话估算 ≈ ${fmtBubbleToken(session.total.low)}–${fmtBubbleToken(session.total.high)} token`
         : '正在等待后台更新统计数据';
@@ -4577,33 +4574,25 @@
       const rawPct = pct != null ? pct : (d.actual / d.budget) * 100;
       const usedRound = rawPct > 0 && rawPct < 1 ? 1 : Math.min(100, Math.max(0, Math.round(rawPct)));
       const remRound = Math.max(0, 100 - usedRound);
-      if (rawPct >= 90) {
-        tipTitle.textContent = '上下文窗口（高占用告警）：';
-        tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}% · 接近上限）`;
-      } else if (rawPct >= 75) {
-        tipTitle.textContent = '上下文窗口（占用偏高）：';
-        tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}% · 占用偏高）`;
-      } else {
-        tipTitle.textContent = '上下文窗口：';
-        tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}%）`;
-      }
+      tipTitle.textContent = '上下文窗口';
+      tipPct.textContent = `${usedRound}% 已用（剩余 ${remRound}%）`;
       tipDetail.textContent = `已用 ${fmtBubbleToken(d.actual)} token，共 ${fmtBubbleToken(d.budget)}${incomplete ? '（含未知附件）' : ''}`;
     } else if (d?.actual != null && !d?.budget) {
-      tipTitle.textContent = '上下文窗口：';
-      tipPct.textContent = '容量未知（未返回上限）';
+      tipTitle.textContent = '上下文窗口';
+      tipPct.textContent = '容量未知';
       tipDetail.textContent = `已用 ${fmtBubbleToken(d.actual)} token，总容量未知`;
     } else if (d?.estimated || d?.estimate != null) {
-      tipTitle.textContent = '上下文窗口（本地估算）：';
-      tipPct.textContent = '真实占比未知（仅估算）';
+      tipTitle.textContent = '上下文窗口 · 本地估算';
+      tipPct.textContent = '真实占比未知';
       tipDetail.textContent = `已用 ≈ ${fmtBubbleToken(d.estimate)} token${d.budget ? `，共 ${fmtBubbleToken(d.budget)}` : '，总容量未知'}`;
     } else if (session) {
-      tipTitle.textContent = '上下文窗口（本地估算）：';
-      tipPct.textContent = '等待请求统计（仅归档估算）';
+      tipTitle.textContent = '上下文窗口 · 本地估算';
+      tipPct.textContent = '等待请求统计';
       tipDetail.textContent = `会话累计 ≈ ${fmtBubbleToken(session.total.low)}–${fmtBubbleToken(session.total.high)} token`;
     } else {
-      tipTitle.textContent = '上下文窗口：';
-      tipPct.textContent = '数据尚未就绪';
-      tipDetail.textContent = '正在读取当前会话上下文用量…';
+      tipTitle.textContent = '上下文窗口';
+      tipPct.textContent = '读取中…';
+      tipDetail.textContent = '';
     }
 
     setTooltipContent('context', { title: tipTitle.textContent, pct: tipPct.textContent, detail: tipDetail.textContent });
@@ -4753,16 +4742,16 @@
       if (sp.ttft != null) detailParts.push(`首字 ${sp.ttft}s`);
       detailParts.push(`产出 ${fmt(sp.outputTokens)} tok`);
       setTooltipContent('speed', {
-        title: '输出速度：',
+        title: '输出速度',
         pct: `${sp.tps} tok/s${sp.streamingTps ? `（流式 ${sp.streamingTps} tok/s）` : ''}`,
         detail: detailParts.join(' · ')
       });
     } else if (state.requestBusy) {
       if (speedHoverExtra) speedHoverExtra.textContent = '';
-      setTooltipContent('speed', { title: '输出速度：', pct: '计算中…', detail: '正在等待模型返回或计算生成指标' });
+      setTooltipContent('speed', { title: '输出速度', pct: '计算中…', detail: '' });
     } else {
       if (speedHoverExtra) speedHoverExtra.textContent = ' · 待生成';
-      setTooltipContent('speed', { title: '输出速度：', pct: '等待模型输出', detail: '完成一次生成后显示 tok/s、首字延迟与总耗时' });
+      setTooltipContent('speed', { title: '输出速度', pct: '等待模型输出', detail: '' });
     }
 
     if (el('key-summary')) {
@@ -4779,49 +4768,40 @@
         if (keyBadge) { keyBadge.textContent = '已超限'; keyBadge.className = 'key-pill pill-danger'; }
         if (keyUsed) keyUsed.textContent = d.serviceLimit ? `>${short(d.serviceLimit)}` : '超限';
         if (keyLimit) keyLimit.textContent = d.serviceLimit ? short(d.serviceLimit) : (d.budget ? short(d.budget) : '—');
-        if (keyRemaining) keyRemaining.textContent = '0 (已溢出)';
-        if (keyTakeaway) keyTakeaway.textContent = `已超出服务端最大限制${d.serviceLimit ? `（${fmt(d.serviceLimit)} tokens）` : ''}，当前对话已被拒绝。需精简或新建会话。`;
+        if (keyRemaining) keyRemaining.textContent = '0';
       } else if (d?.error) {
         const ec = d.errorClassification;
         if (keyBadge) { keyBadge.textContent = ec?.shortBadge || '异常'; keyBadge.className = 'key-pill pill-danger'; }
         if (keyUsed) keyUsed.textContent = d?.actual != null ? `${short(d.actual)}${d?.budget ? ` (${((d.actual / d.budget) * 100).toFixed(1)}%)` : ''}` : '—';
         if (keyLimit) keyLimit.textContent = d?.budget ? short(d.budget) : '—';
         if (keyRemaining) keyRemaining.textContent = (d?.actual != null && d?.budget) ? short(Math.max(0, d.budget - d.actual)) : '—';
-        if (keyTakeaway) keyTakeaway.textContent = ec?.detail ? `${ec.headline}：${ec.detail}` : '最近请求遇到错误，未产生有效的最新统计结果。';
       } else if (d?.actual != null && pct != null) {
         // 预算上限完全来自服务端动态返回（Gemini 256K / Claude Opus 840K 等），不再臆造 256000 或 1M
         const limitVal = Number(d.budget) || 0;
         const remainVal = limitVal ? Math.max(0, limitVal - d.actual) : 0;
-        const remainPct = Math.max(0, 100 - pct);
 
         if (keyBadge) {
-          if (pct >= 90) { keyBadge.textContent = '紧张'; keyBadge.className = 'key-pill pill-danger'; }
+          if (pct >= 90) { keyBadge.textContent = '接近上限'; keyBadge.className = 'key-pill pill-danger'; }
           else if (pct >= 75) { keyBadge.textContent = '偏高'; keyBadge.className = 'key-pill pill-warn'; }
           else { keyBadge.textContent = '正常'; keyBadge.className = 'key-pill pill-muted'; }
         }
         if (keyUsed) keyUsed.textContent = `${short(d.actual)} (${pct.toFixed(1)}%)`;
         if (keyLimit) keyLimit.textContent = limitVal ? short(limitVal) : '—';
-        if (keyRemaining) keyRemaining.textContent = limitVal ? `${short(remainVal)} (${remainPct.toFixed(1)}%)` : '—';
-        if (keyTakeaway) {
-          if (pct >= 90) {
-            keyTakeaway.textContent = `剩余约 ${short(remainVal)} tokens，已接近 ${short(limitVal)} 上限。建议执行 /compact 压缩上下文或新建会话。`;
-          } else if (pct >= 75) {
-            keyTakeaway.textContent = `已使用 ${pct.toFixed(1)}%，剩余可用空间约 ${short(remainVal)} tokens，注意大文件或长输出。`;
-          } else {
-            keyTakeaway.textContent = `当前用量健康（${pct.toFixed(1)}%），剩余约 ${short(remainVal)} tokens。`;
-          }
-        }
+        if (keyRemaining) keyRemaining.textContent = limitVal ? short(remainVal) : '—';
       } else {
         if (keyBadge) { keyBadge.textContent = d?.estimated ? '估算' : '读取中'; keyBadge.className = 'key-pill pill-muted'; }
         if (keyUsed) keyUsed.textContent = d?.estimate ? `约 ${short(d.estimate)}` : (session ? short(session.total.low) : '—');
         if (keyLimit) keyLimit.textContent = d?.budget ? short(d.budget) : '—';
         if (keyRemaining) keyRemaining.textContent = '—';
-        if (keyTakeaway) keyTakeaway.textContent = '当前主要依赖本地估算或待服务端返回实际统计，暂不计算精确剩余空间。';
       }
 
       if (keyTakeaway) {
-        const isKeyAlert = Boolean(d?.exceeded || d?.error || stale || incomplete || (pct != null && pct >= 75));
-        keyTakeaway.setAttribute('data-quiet', isKeyAlert ? 'false' : 'true');
+        const ec = d?.errorClassification;
+        const alert = d?.exceeded
+          ? `已超出服务端最大限制${d.serviceLimit ? `（${fmt(d.serviceLimit)} tokens）` : ''}，本轮请求已被拒绝。`
+          : d?.error ? (ec?.detail ? `${ec.headline}：${ec.detail}` : '最近请求失败，暂无有效的新统计。') : '';
+        keyTakeaway.textContent = alert;
+        keyTakeaway.setAttribute('data-quiet', alert ? 'false' : 'true');
       }
 
       // 最近请求缓存命中率
@@ -4918,12 +4898,12 @@
           }
         } else {
           resetSegs();
-          if (bdText) bdText.textContent = '构成：当前会话暂无正文负载';
+          if (bdText) bdText.textContent = '构成：—';
         }
       } else {
         resetSegs();
         if (bdText) {
-          bdText.textContent = state.scanBusy ? '构成：正在扫描会话归档…' : (state.scanError ? '构成：会话归档未就绪' : '构成：待扫描会话归档');
+          bdText.textContent = state.scanBusy ? '构成：扫描中…' : (state.scanError ? '构成：未就绪' : '构成：待扫描');
         }
       }
     }
@@ -4934,7 +4914,6 @@
       const spDur = el('speed-duration');
       const spTtft = el('speed-ttft');
       const spTokens = el('speed-tokens');
-      const spTakeaway = el('speed-takeaway');
 
       if (sp?.tps != null) {
         if (spBadge) {
@@ -4948,25 +4927,12 @@
         if (spDur) spDur.textContent = sp.duration ? `${sp.duration}s` : '—';
         if (spTtft) spTtft.textContent = sp.ttft ? `${sp.ttft}s` : '—';
         if (spTokens) spTokens.textContent = `${fmt(sp.outputTokens)} tok`;
-        if (spTakeaway) {
-          const modelStr = d?.model ? `（${d.model}）` : '';
-          const streamInfo = sp.streamingTps ? `，纯流式 ${sp.streamingTps} tok/s` : '';
-          spTakeaway.textContent = sp.tps < 15
-            ? `输出偏慢（${sp.tps} tok/s${streamInfo}），首字延迟 ${sp.ttft ?? '—'}s，总耗时 ${sp.duration}s${modelStr}。`
-            : `输出${sp.tps >= 35 ? '流畅' : '平稳'}（${sp.tps} tok/s${streamInfo}），总耗时 ${sp.duration}s 内生成 ${fmt(sp.outputTokens)} tokens${modelStr}。`;
-        }
       } else {
         if (spBadge) { spBadge.textContent = state.requestBusy ? '计算中' : '待生成'; spBadge.className = 'key-pill pill-muted'; }
         if (spVal) spVal.textContent = '—';
         if (spDur) spDur.textContent = '—';
         if (spTtft) spTtft.textContent = '—';
         if (spTokens) spTokens.textContent = '—';
-        if (spTakeaway) spTakeaway.textContent = '等待当前或下一次模型输出完成，将自动计算输出速度 (tok/s)、首字延迟与总耗时。';
-      }
-
-      if (spTakeaway) {
-        const isSpeedAlert = Boolean(sp?.tps != null && sp.tps < 15);
-        spTakeaway.setAttribute('data-quiet', isSpeedAlert ? 'false' : 'true');
       }
     }
 
@@ -5016,7 +4982,7 @@
         if (sessLastEl) sessLastEl.textContent = '—';
         if (sessSavedEl) sessSavedEl.textContent = '—';
         if (sessMetaLeft) {
-          sessMetaLeft.textContent = state.requestBusy ? '正在读取本会话请求记录…' : '等待请求统计产生会话费用…';
+          sessMetaLeft.textContent = state.requestBusy ? '读取中…' : '';
         }
         if (sessMetaRight) sessMetaRight.textContent = '';
       }
@@ -5074,11 +5040,30 @@
     const controller = new AbortController(); state.controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 12000);
     try {
-      const csrf = window.__APP_CONFIG__?.csrfToken; if (!csrf) throw new Error('后台尚未就绪');
       const offset = Math.max(0, state.count - 3);
-      const response = await fetch('/exa.language_server_pb.LanguageServerService/GetCascadeTrajectoryGeneratorMetadata', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1', 'x-codeium-csrf-token': csrf }, body: JSON.stringify({ cascadeId: id, generatorMetadataOffset: offset, includeMessages: false }), signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json(); if (generation !== state.generation || state.disposed) return;
+      const csrf = window.__APP_CONFIG__?.csrfToken;
+      const pollViaIpc = typeof window.contextMeterAPI?.pollMetadata === 'function'
+        ? async () => {
+          const res = await window.contextMeterAPI.pollMetadata(id, offset);
+          if (!res?.ok) throw new Error(res?.error || '后台尚未就绪');
+          return typeof res.json === 'string' ? JSON.parse(res.json) : res.data;
+        }
+        : null;
+      let data = null;
+      if (csrf) {
+        const response = await fetch('/exa.language_server_pb.LanguageServerService/GetCascadeTrajectoryGeneratorMetadata', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1', 'x-codeium-csrf-token': csrf }, body: JSON.stringify({ cascadeId: id, generatorMetadataOffset: offset, includeMessages: false }), signal: controller.signal });
+        if ((response.status === 401 || response.status === 403) && pollViaIpc) {
+          data = await pollViaIpc();
+        } else {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          data = await response.json();
+        }
+      } else if (pollViaIpc) {
+        data = await pollViaIpc();
+      } else {
+        throw new Error('后台尚未就绪');
+      }
+      if (!data || generation !== state.generation || state.disposed) return;
       const rows = data.generatorMetadata || [];
       state.count = rows.length ? offset + rows.length : 0;
       const todayKey = formatLocalYmd(new Date());
@@ -5210,7 +5195,7 @@
 
   const timer = setInterval(tick, 500);
   globalThis.__AGContextMeter = {
-    version: '3.1.1',
+    version: METER_VERSION,
     ensureAlive: () => {
       if (state.disposed) return false;
       ensureHostDocked();

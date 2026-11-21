@@ -1236,6 +1236,236 @@ test('v3.1.1: Antigravity v2.33.0 Gemini 4 Neon & Orchestrator (Neon) pricing, h
   ]);
 });
 
+test('v3.2.0: ASAR in-place patch & byte-exact SHA-256 undo, streaming fallback, Fuse[4] guard, authBootstrap same-origin check, and heal.js --check', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const crypto = require('node:crypto');
+  const { execFileSync } = require('node:child_process');
+  const {
+    patchAsarEntry,
+    unpatchAsarEntry,
+    inspectAsarStatus,
+    locateAsarNodeByteRange,
+    normalizeAsarEntryPath
+  } = require('./asar-patch');
+  const { getSyncLsAuth, resolveLsAuth } = require('./auth-provider');
+  const { resolveOwningWindowForWebContents } = require('./host-adapter');
+  const { isLocalMainFrameSender } = require('./meter-main');
+  const { pollGeneratorMetadataJsonAsync, ALLOWED_LS_METHODS } = require('./meter-collector');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-v32-arch-'));
+  try {
+    function buildSyntheticAsar(entrySource, { reverseKeys = false } = {}) {
+      const entryBuf = Buffer.from(entrySource, 'utf8');
+      const siblingBuf = Buffer.from('module.exports = { hello: "world" };\n', 'utf8');
+      const pkgBuf = Buffer.from('{"name":"agy-mock","version":"2.34.0","main":"dist/main.js"}', 'utf8');
+      const entrySha = crypto.createHash('sha256').update(entryBuf).digest('hex');
+      const sibSha = crypto.createHash('sha256').update(siblingBuf).digest('hex');
+      const mainNode = reverseKeys
+        ? {
+          offset: '0',
+          integrity: { blocks: [entrySha], blockSize: 4194304, hash: entrySha, algorithm: 'SHA256' },
+          size: entryBuf.length
+        }
+        : {
+          size: entryBuf.length,
+          offset: '0',
+          integrity: { algorithm: 'SHA256', hash: entrySha, blockSize: 4194304, blocks: [entrySha] }
+        };
+      const headerJsonObj = {
+        files: {
+          'package.json': {
+            size: pkgBuf.length,
+            offset: String(entryBuf.length + siblingBuf.length)
+          },
+          dist: {
+            files: {
+              'main.js': mainNode,
+              'other.js': {
+                size: siblingBuf.length,
+                offset: String(entryBuf.length),
+                integrity: { algorithm: 'SHA256', hash: sibSha, blockSize: 4194304, blocks: [sibSha] }
+              }
+            }
+          }
+        }
+      };
+      const finalJsonBuf = Buffer.from(JSON.stringify(headerJsonObj), 'utf8');
+      const jsonSize = finalJsonBuf.length;
+      const padding = (4 - (jsonSize % 4)) % 4;
+      const headerPickleSize = 4 + jsonSize + padding;
+      const pre = Buffer.alloc(16);
+      pre.writeUInt32LE(4, 0);
+      pre.writeUInt32LE(headerPickleSize + 4, 4);
+      pre.writeUInt32LE(headerPickleSize, 8);
+      pre.writeUInt32LE(jsonSize, 12);
+      return Buffer.concat([pre, finalJsonBuf, Buffer.alloc(padding), entryBuf, siblingBuf, pkgBuf]);
+    }
+
+    const loaderPath = path.join(tmpDir, 'loader.js');
+    fs.writeFileSync(loaderPath, '// mock loader\n', 'utf8');
+
+    // 1) Standard ASAR with integrity block & reversed JSON key order -> in-place patch + idempotent re-patch + byte-exact SHA-256 undo
+    const origEntry = '"use strict";\nconst electron = require("electron");\nconsole.log(Boolean(electron));\n';
+    const asarPadded = path.join(tmpDir, 'padded.asar');
+    const origBuf = buildSyntheticAsar(origEntry, { reverseKeys: true });
+    fs.writeFileSync(asarPadded, origBuf);
+    const origSha = crypto.createHash('sha256').update(origBuf).digest('hex');
+
+    // Verify locateAsarNodeByteRange handles arbitrary key ordering
+    const hdrStrLen = origBuf.readUInt32LE(12);
+    const range = locateAsarNodeByteRange(origBuf.subarray(16, 16 + hdrStrLen), 'dist/main.js');
+    assert.ok(range && range.byteStart > 0 && range.byteEnd > range.byteStart && range.nodeObj.size === Buffer.byteLength(origEntry));
+
+    const undoPadded = path.join(tmpDir, 'padded-undo.json');
+    const p1 = patchAsarEntry({ asarPath: asarPadded, loaderPath, undoFilePath: undoPadded });
+    assert.equal(p1.patched, true);
+    assert.equal(p1.mode, 'in-place');
+
+    const insp = inspectAsarStatus(asarPadded, loaderPath);
+    assert.equal(insp.hooked, true);
+    assert.equal(insp.hookMatchesExpected, true);
+
+    const p2 = patchAsarEntry({ asarPath: asarPadded, loaderPath, undoFilePath: undoPadded });
+    assert.equal(p2.patched, false);
+    assert.equal(p2.alreadyPatched, true);
+    assert.equal(p2.mode, 'noop');
+
+    const u1 = unpatchAsarEntry({ asarPath: asarPadded, undoFilePath: undoPadded });
+    assert.equal(u1.restored, true);
+    assert.equal(u1.mode, 'byte-exact-undo');
+    const restoredSha = crypto.createHash('sha256').update(fs.readFileSync(asarPadded)).digest('hex');
+    assert.equal(restoredSha, origSha, 'unpatchAsarEntry must restore exact original SHA-256');
+
+    // 2) Compact ASAR (0 slack, no integrity block so node grows wider) -> streaming rewrite fallback + clean unpatch
+    const asarCompact = path.join(tmpDir, 'compact.asar');
+    const compactBuf = (() => {
+      const entryBuf = Buffer.from(origEntry, 'utf8');
+      const pkgBuf = Buffer.from('{"name":"agy-mock","main":"dist/main.js"}', 'utf8');
+      const hdrBuf = Buffer.from(JSON.stringify({
+        files: {
+          'package.json': { size: pkgBuf.length, offset: String(entryBuf.length) },
+          dist: { files: { 'main.js': { size: entryBuf.length, offset: '0' } } }
+        }
+      }), 'utf8');
+      const jsonSize = hdrBuf.length;
+      const padding = (4 - (jsonSize % 4)) % 4;
+      const headerPickleSize = 4 + jsonSize + padding;
+      const pre = Buffer.alloc(16);
+      pre.writeUInt32LE(4, 0);
+      pre.writeUInt32LE(headerPickleSize + 4, 4);
+      pre.writeUInt32LE(headerPickleSize, 8);
+      pre.writeUInt32LE(jsonSize, 12);
+      return Buffer.concat([pre, hdrBuf, Buffer.alloc(padding), entryBuf, pkgBuf]);
+    })();
+    fs.writeFileSync(asarCompact, compactBuf);
+    const pc = patchAsarEntry({ asarPath: asarCompact, loaderPath });
+    assert.equal(pc.patched, true);
+    assert.equal(pc.mode, 'stream-rewrite');
+    assert.equal(inspectAsarStatus(asarCompact, loaderPath).hookMatchesExpected, true);
+    const uc = unpatchAsarEntry({ asarPath: asarCompact });
+    assert.equal(uc.restored, true);
+    assert.equal(inspectAsarStatus(asarCompact, loaderPath).hooked, false);
+
+    // 3) Electron Fuse V1 EnableEmbeddedAsarIntegrityValidation (Fuse[4] = '1') & unknown fuse in strict mode must refuse patching
+    assert.equal(normalizeAsarEntryPath('./dist/main.js'), 'dist/main.js');
+    assert.equal(normalizeAsarEntryPath('\\dist\\main.js'), 'dist/main.js');
+
+    const mockExe = path.join(tmpDir, 'AntigravityMock.exe');
+    const sentinel = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX', 'utf8');
+    const fuseMeta = Buffer.from([1, 9]); // version=1, length=9
+    const fuseBitsOn = Buffer.from('101110011', 'ascii'); // index 4 === '1'
+    fs.writeFileSync(mockExe, Buffer.concat([Buffer.alloc(128), sentinel, fuseMeta, fuseBitsOn, Buffer.alloc(128)]));
+    assert.throws(
+      () => patchAsarEntry({ asarPath: asarPadded, loaderPath, customExePath: mockExe }),
+      err => err && err.code === 'ERR_ASAR_INTEGRITY_FUSE_ENABLED'
+    );
+    const mockExeV2Unknown = path.join(tmpDir, 'AntigravityV2.exe');
+    fs.writeFileSync(mockExeV2Unknown, Buffer.concat([Buffer.alloc(64), sentinel, Buffer.from([2, 9]), fuseBitsOn, Buffer.alloc(64)]));
+    assert.throws(
+      () => patchAsarEntry({ asarPath: asarPadded, loaderPath, customExePath: mockExeV2Unknown }),
+      err => err && err.code === 'ERR_ASAR_INTEGRITY_FUSE_UNKNOWN'
+    );
+    assert.throws(
+      () => patchAsarEntry({ asarPath: asarPadded, loaderPath, strictFuseCheck: true }),
+      err => err && err.code === 'ERR_ASAR_INTEGRITY_FUSE_UNKNOWN'
+    );
+
+    // 4) heal.js --check heals an unpatched ASAR inside a realistic <appRoot>/resources/app.asar layout with Fuse[4]='0'
+    const appRoot = path.join(tmpDir, 'MockApp');
+    const resDir = path.join(appRoot, 'resources');
+    fs.mkdirSync(resDir, { recursive: true });
+    const exeName = process.platform === 'win32' ? 'Antigravity.exe' : 'antigravity';
+    const fuseBitsOff = Buffer.from('101100011', 'ascii'); // index 4 === '0'
+    fs.writeFileSync(path.join(appRoot, exeName), Buffer.concat([Buffer.alloc(128), sentinel, fuseMeta, fuseBitsOff, Buffer.alloc(128)]));
+    const healTargetAsar = path.join(resDir, 'app.asar');
+    fs.copyFileSync(asarPadded, healTargetAsar);
+
+    const stateDir = path.join(tmpDir, 'runtime-state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'loader.js'), '// runtime loader\n', 'utf8');
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'heal.js'), '--check', '--asar', healTargetAsar, '--state-dir', stateDir],
+      { windowsHide: true, timeout: 5000 }
+    );
+    assert.equal(inspectAsarStatus(healTargetAsar, path.join(stateDir, 'loader.js')).hookMatchesExpected, true);
+    const healLog = fs.readFileSync(path.join(stateDir, 'state', 'heal-log.jsonl'), 'utf8').trim();
+    assert.match(healLog, /"event":"check-healed"/);
+
+    // 5) authBootstrap same-origin guard in auth-provider.js + IPC sender origin/aux validation in meter-main.js
+    const mockAuthBootstrap = {
+      getActiveLsCsrfToken: () => 'csrf-v234-token',
+      getActiveLsPort: () => 7575,
+      getActiveLsBaseUrl: () => 'https://127.0.0.1:7575'
+    };
+    assert.equal(getSyncLsAuth('https://127.0.0.1:7575', { authBootstrap: mockAuthBootstrap })?.csrfToken, 'csrf-v234-token');
+    assert.equal(getSyncLsAuth('https://127.0.0.1:8888', { authBootstrap: mockAuthBootstrap }), null, 'Must never leak csrfToken to mismatched port');
+    assert.equal(getSyncLsAuth('http://127.0.0.1:7575', { authBootstrap: mockAuthBootstrap }), null, 'Must never leak csrfToken over plain HTTP');
+    assert.equal(getSyncLsAuth('https://127.0.0.1:7575', { authBootstrap: { getActiveLsCsrfToken: () => Promise.resolve('bad'), getActiveLsBaseUrl: () => 'https://127.0.0.1:7575' } }), null);
+    const resolvedAuth = await resolveLsAuth('https://127.0.0.1:7575', null, { authBootstrap: mockAuthBootstrap });
+    assert.equal(resolvedAuth?.csrfToken, 'csrf-v234-token');
+    assert.equal(resolvedAuth?.source, 'authBootstrap');
+
+    const mainWc = { isDestroyed: () => false, getURL: () => 'https://127.0.0.1:7575/c/11111111-1111-1111-1111-111111111111', mainFrame: {} };
+    const wrongPortWc = { isDestroyed: () => false, getURL: () => 'https://127.0.0.1:9999/', mainFrame: {} };
+    assert.equal(
+      isLocalMainFrameSender({ sender: mainWc, senderFrame: mainWc.mainFrame }, { authBootstrap: mockAuthBootstrap, defaultSession: null })?.origin,
+      'https://127.0.0.1:7575'
+    );
+    assert.equal(
+      isLocalMainFrameSender({ sender: wrongPortWc, senderFrame: wrongPortWc.mainFrame }, { authBootstrap: mockAuthBootstrap, defaultSession: null }),
+      null,
+      'IPC sender on unrelated localhost port must be rejected when authBootstrap active origin is known'
+    );
+
+    // 6) BaseWindow contentView.children owning-window resolver
+    const fakeWebContents = { id: 42 };
+    const childView = { children: [{ webContents: fakeWebContents }] };
+    const fakeBaseWin = { isDestroyed: () => false, contentView: { children: [childView] } };
+    assert.equal(
+      resolveOwningWindowForWebContents(fakeWebContents, { electron: { BaseWindow: { getAllWindows: () => [fakeBaseWin] } } }),
+      fakeBaseWin
+    );
+
+    // 7) pollGeneratorMetadataJsonAsync input & auth validation + read-only ALLOWED_LS_METHODS allowlist
+    assert.equal(ALLOWED_LS_METHODS.has('GetCascadeTrajectoryGeneratorMetadata'), true);
+    assert.equal(ALLOWED_LS_METHODS.has('SendUserCascadeMessage'), false);
+    await assert.rejects(
+      () => pollGeneratorMetadataJsonAsync('https://127.0.0.1:7575', 'not-a-uuid', 0, { csrfToken: 'tok' }),
+      /无效本机会话/
+    );
+    await assert.rejects(
+      () => pollGeneratorMetadataJsonAsync('https://127.0.0.1:65534', '64f0cef6-1c40-49db-81ca-d33d09f04e94', 0, { csrfToken: '' }),
+      err => err && err.code === 'AUTH'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
 
 
 
