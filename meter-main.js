@@ -322,6 +322,10 @@ function registerIpcOnce() {
       if (!targetWin || targetWin.isDestroyed?.() || isHostAuxOrRemoteWindow(targetWin)) return { ok: false };
       applyWindowsMenuBarFix(targetWin);
       if (typeof targetWin.setTitleBarOverlay !== 'function') return { ok: true };
+      const hostUtils = getCachedHostModule('utils');
+      if (hostUtils && typeof hostUtils.hasCustomWindowControls === 'function' && hostUtils.hasCustomWindowControls(targetWin)) {
+        return { ok: true, skippedCustomControls: true };
+      }
       const patch = {};
       if (options && typeof options.color === 'string') patch.color = options.color;
       if (options && typeof options.symbolColor === 'string') patch.symbolColor = options.symbolColor;

@@ -51,7 +51,7 @@
     dailyMap: {}
   };
 
-  const METER_VERSION = '3.2.0';
+  const METER_VERSION = '3.2.1';
   const RING_RADIUS = 6.5;
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 

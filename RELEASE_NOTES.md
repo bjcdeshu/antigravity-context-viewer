@@ -1,3 +1,17 @@
+# Release Notes — v3.2.1
+
+## Antigravity Context & Token Viewer v3.2.1
+
+### Highlights
+1. **修复 Windows NSIS 热更新卸载前瞬时文件探测导致的 `heal.js` 提前退出竞态**
+   - 根因定位（`v2.34.0 -> v2.35.1` 实测日志）：NSIS 安装器在删除旧版前对 `app.asar` 的短暂锁定会令 `fs.statSync` 瞬时返回空并置位 `sawMissing`，旧逻辑中的 `&& !sawMissing` 放行了对尚未被删除的旧版已注入 `app.asar` 的检查，导致 `heal.js` 误判 `already-hooked (2.34.0)` 提前 14 秒退出。
+   - 修复：移除 `&& !sawMissing` 旁路，严格要求文件签名（`size:mtimeMs`）必须偏离旧版已注入归档签名，并由 `loader.js` 额外传入 `--old-ver` 双重防误判（即使旧包在被删前 `mtime` 变动也绝不在旧版本已钩包上提前退出）。
+
+2. **Antigravity `v2.35.1` 自定义窗口控制按钮（`customWindowControls`）前瞻适配**
+   - 适配 `v2.35.1` 新增的 `dist/customWindowControls.js`（`utils.hasCustomWindowControls(win)`）：当宿主窗口启用页面自绘最小化/最大化/关闭按钮（`titleBarOverlay: false`）时，`context-meter:sync-overlay` 自动跳过原生 `setTitleBarOverlay` 调用。
+
+---
+
 # Release Notes — v3.2.0
 
 ## Antigravity Context & Token Viewer v3.2.0

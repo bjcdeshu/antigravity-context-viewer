@@ -19,6 +19,7 @@ function parseArgs(argv) {
     stateDir: '',
     parentPid: 0,
     oldSig: '',
+    oldVer: '',
     timeoutMs: 300000,
     allowUnknownFuse: false
   };
@@ -31,6 +32,7 @@ function parseArgs(argv) {
     else if (a === '--state-dir' && argv[i + 1]) out.stateDir = argv[++i];
     else if (a === '--parent-pid' && argv[i + 1]) out.parentPid = Number(argv[++i]) || 0;
     else if (a === '--old-sig' && argv[i + 1]) out.oldSig = String(argv[++i]);
+    else if (a === '--old-ver' && argv[i + 1]) out.oldVer = String(argv[++i]);
     else if (a === '--timeout-ms' && argv[i + 1]) out.timeoutMs = Math.max(2000, Number(argv[++i]) || 300000);
   }
   return out;
@@ -203,7 +205,8 @@ async function runHeal(opts) {
     }
 
     // Step 2: Start full post-exit budget. Gate strictly on `fs.statSync` until identity changes & stabilizes.
-    const postExitDeadline = Date.now() + opts.timeoutMs;
+    const postExitStartedAt = Date.now();
+    const postExitDeadline = postExitStartedAt + opts.timeoutMs;
     let sawMissing = false;
     let prevCandidateSig = '';
     let stablePolls = 0;
@@ -219,8 +222,12 @@ async function runHeal(opts) {
         continue;
       }
 
-      // While old ASAR is still untouched on disk, open NOTHING inside $INSTDIR so NSIS uninstaller never sees EBUSY!
-      if (baselineSig && curStat.sig === baselineSig && !sawMissing) {
+      // CRITICAL: Never inspect or exit on the pre-update hooked ASAR — even after a transient
+      // NSIS sharing lock / missing stat! Because baselineSig is captured on the hooked archive
+      // (+39KB larger than any clean unhooked archive), a newly extracted archive will NEVER match baselineSig.
+      if (baselineSig && curStat.sig === baselineSig) {
+        prevCandidateSig = '';
+        stablePolls = 0;
         await sleep(45);
         continue;
       }
@@ -249,6 +256,15 @@ async function runHeal(opts) {
       try {
         const st = inspectAsarStatus(asarPath, loaderPath);
         if (st.hookMatchesExpected) {
+          // Belt-and-suspenders: if NSIS touched mtime on the old hooked ASAR before deleting it,
+          // keep waiting rather than exiting prematurely on oldVer!
+          if (opts.oldVer && st.appVersion === opts.oldVer && Date.now() - postExitStartedAt < 90000) {
+            baselineSig = curStat.sig;
+            prevCandidateSig = '';
+            stablePolls = 0;
+            await sleep(90);
+            continue;
+          }
           appendHealLog(stateDir, { event: 'already-hooked', appVersion: st.appVersion });
           return { status: 'already-hooked', appVersion: st.appVersion };
         }

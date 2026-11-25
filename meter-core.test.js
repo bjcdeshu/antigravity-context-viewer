@@ -1460,6 +1460,72 @@ test('v3.2.0: ASAR in-place patch & byte-exact SHA-256 undo, streaming fallback,
       () => pollGeneratorMetadataJsonAsync('https://127.0.0.1:65534', '64f0cef6-1c40-49db-81ca-d33d09f04e94', 0, { csrfToken: '' }),
       err => err && err.code === 'AUTH'
     );
+
+    // 8) v3.2.1 Regression: heal.js --wait-update never exits prematurely on old hooked ASAR after transient NSIS missing/mtime probe
+    const { runHeal } = require('./heal');
+    const buildVersionedAsar = ver => {
+      const entryBuf = Buffer.from(`${origEntry}// ${'x'.repeat(1200)}\n`, 'utf8');
+      const pkgBuf = Buffer.from(JSON.stringify({ name: 'agy-mock', version: ver, main: 'dist/main.js' }), 'utf8');
+      const entrySha = crypto.createHash('sha256').update(entryBuf).digest('hex');
+      const headerJsonObj = {
+        files: {
+          'package.json': { size: pkgBuf.length, offset: String(entryBuf.length) },
+          dist: {
+            files: {
+              'main.js': {
+                size: entryBuf.length,
+                offset: '0',
+                integrity: { algorithm: 'SHA256', hash: entrySha, blockSize: 4194304, blocks: [entrySha] }
+              }
+            }
+          }
+        }
+      };
+      const jBuf = Buffer.from(JSON.stringify(headerJsonObj), 'utf8');
+      const pad = (4 - (jBuf.length % 4)) % 4;
+      const pkl = 4 + jBuf.length + pad;
+      const pre = Buffer.alloc(16);
+      pre.writeUInt32LE(4, 0);
+      pre.writeUInt32LE(pkl + 4, 4);
+      pre.writeUInt32LE(pkl, 8);
+      pre.writeUInt32LE(jBuf.length, 12);
+      return Buffer.concat([pre, jBuf, Buffer.alloc(pad), entryBuf, pkgBuf]);
+    };
+
+    const runtimeLoader = path.join(stateDir, 'loader.js');
+    // Prepare hooked v2.34.0 on disk
+    fs.writeFileSync(healTargetAsar, buildVersionedAsar('2.34.0'));
+    patchAsarEntry({ asarPath: healTargetAsar, loaderPath: runtimeLoader });
+    const hooked234Buf = fs.readFileSync(healTargetAsar);
+    const oldSt = fs.statSync(healTargetAsar);
+    const oldSig = `${oldSt.size}:${Math.trunc(oldSt.mtimeMs)}`;
+
+    const healPromise = runHeal({
+      mode: 'wait-update',
+      asarPath: healTargetAsar,
+      stateDir,
+      oldSig,
+      oldVer: '2.34.0',
+      timeoutMs: 8000
+    });
+
+    // Simulate NSIS transient missing stat -> old hooked 2.34.0 still visible (with original mtime AND touched mtime) -> replaced by unhooked 2.35.1
+    await new Promise(r => setTimeout(r, 70));
+    fs.unlinkSync(healTargetAsar); // triggers sawMissing = true
+    await new Promise(r => setTimeout(r, 70));
+    fs.writeFileSync(healTargetAsar, hooked234Buf);
+    fs.utimesSync(healTargetAsar, oldSt.atime, oldSt.mtime); // exact same baselineSig after sawMissing
+    await new Promise(r => setTimeout(r, 130));
+    const touchedTime = new Date(oldSt.mtimeMs + 5000);
+    fs.utimesSync(healTargetAsar, touchedTime, touchedTime); // even mtime touched on old hooked 2.34.0!
+    await new Promise(r => setTimeout(r, 150));
+    // Now NSIS extracts clean unhooked 2.35.1
+    fs.writeFileSync(healTargetAsar, buildVersionedAsar('2.35.1'));
+
+    const healRes = await healPromise;
+    assert.equal(healRes.status, 'healed', 'heal.js must wait past transient missing & old hooked 2.34.0 to heal 2.35.1');
+    assert.equal(healRes.appVersion, '2.35.1');
+    assert.equal(inspectAsarStatus(healTargetAsar, runtimeLoader).hookMatchesExpected, true);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

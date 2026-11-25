@@ -133,6 +133,7 @@
       const st = fs.statSync(targetAsar);
       oldSig = `${st.size}:${Math.trunc(st.mtimeMs)}`;
     } catch {}
+    const oldVer = typeof app.getVersion === 'function' ? String(app.getVersion() || '') : '';
 
     healSpawned = true;
     // Reset guard after 20s in case user/host cancelled quit so a subsequent update click still works
@@ -148,6 +149,7 @@
         '--parent-pid', String(process.pid)
       ];
       if (oldSig) args.push('--old-sig', oldSig);
+      if (oldVer) args.push('--old-ver', oldVer);
       const child = spawn(nodeBin, args, {
         detached: true,
         stdio: 'ignore',
